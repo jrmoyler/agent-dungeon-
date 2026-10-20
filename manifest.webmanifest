@@ -1,0 +1,19 @@
+{
+  "name": "Agent Dungeon",
+  "short_name": "Agent Dungeon",
+  "description": "A Three.js pixel-dungeon shooter: 28 AI agents, 8 sealed sectors, 10 bosses.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
+  "orientation": "any",
+  "background_color": "#04060b",
+  "theme_color": "#04060b",
+  "categories": ["games", "entertainment"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

@@ -1,0 +1,7 @@
+art/
+tools/
+qa/
+src/
+build/
+node_modules/
+*.py

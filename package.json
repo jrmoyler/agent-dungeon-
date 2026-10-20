@@ -1,14 +1,18 @@
 {
   "name": "agent-dungeon",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
-  "description": "Three.js pixel-dungeon twin-stick shooter starring 14 AI agents",
+  "description": "Three.js pixel-dungeon shooter: 28 AI agents, 8 sealed sectors, 10 bosses",
   "scripts": {
     "build": "python3 build.py",
     "art": "./tools/art/make_art.sh",
+    "icons": "python3 -I tools/art/make_icons.py",
     "serve": "python3 -m http.server 8080",
     "test": "node qa/all.js",
-    "test:shots": "node qa/run.js desktop claude && node qa/run.js mobile claude"
+    "test:play": "node qa/play.js desktop caret 2 && node qa/play.js mobile claude 1"
   },
-  "devDependencies": { "three": "0.170.0", "playwright": "1.56.0" }
+  "devDependencies": {
+    "three": "0.170.0",
+    "playwright": "1.56.0"
+  }
 }

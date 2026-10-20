@@ -2,3 +2,5 @@ node_modules/
 build/
 qa/*.png
 .DS_Store
+__pycache__/
+.vercel
