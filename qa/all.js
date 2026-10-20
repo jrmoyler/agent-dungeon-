@@ -1,41 +1,49 @@
+/* Roster + kit smoke test: every agent loads its atlases, fires every move, and survives a sector loop.
+   Also asserts that no two agents share a name or a stat line.
+   usage: node qa/all.js [id,id,...] */
 const { chromium } = require('playwright');
-const path=require('path'),fs=require('fs');
-const ROOT=require('path').resolve(__dirname,'..'), TN=require('path').resolve(__dirname,'..','node_modules','three');
-const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript','.json':'application/json','.webp':'image/webp'};
-(async()=>{
-  const b=await chromium.launch({...(process.env.CHROME?{executablePath:process.env.CHROME}:{}),args:['--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader']});
-  const page=await (await b.newContext({viewport:{width:1100,height:700}})).newPage();
-  const errs=[];
-  page.on('console',m=>{if(m.type()==='error')errs.push(m.text())});
-  page.on('pageerror',e=>errs.push('PAGEERROR: '+e.message+' '+e.stack));
-  await page.route('**/*',async r=>{const u=new URL(r.request().url());
-    if(u.hostname==='cdn.jsdelivr.net')return r.fulfill({path:path.join(TN,u.pathname.replace('/npm/three@0.170.0','')),contentType:'text/javascript'});
-    if(u.hostname==='game.local'){let p=u.pathname==='/'?'/index.html':u.pathname;const f=path.join(ROOT,p);return fs.existsSync(f)?r.fulfill({path:f,contentType:mime[path.extname(f)]}):r.fulfill({status:404});}
-    return r.fulfill({status:200,body:''});});
+const path = require('path'), fs = require('fs');
+const ROOT = path.resolve(__dirname, '..'), TN = path.resolve(ROOT, 'node_modules', 'three');
+(async () => {
+  const b = await chromium.launch({ ...(process.env.CHROME ? { executablePath: process.env.CHROME } : {}), args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
+  const page = await (await b.newContext({ viewport: { width: 1100, height: 700 } })).newPage();
+  const errs = [];
+  page.on('console', m => { if (m.type() === 'error' && !/fonts\.g/.test(m.text())) errs.push(m.text()); });
+  page.on('pageerror', e => errs.push('PAGEERROR: ' + e.message + ' ' + e.stack));
+  await page.route('**/*', async r => { const u = new URL(r.request().url());
+    if (u.hostname === 'cdn.jsdelivr.net') return r.fulfill({ path: path.join(TN, u.pathname.replace('/npm/three@0.170.0', '')), contentType: 'text/javascript' });
+    if (u.hostname === 'game.local') { const f = path.join(ROOT, u.pathname === '/' ? '/index.html' : decodeURIComponent(u.pathname)); return fs.existsSync(f) ? r.fulfill({ path: f }) : r.fulfill({ status: 404 }); }
+    return r.fulfill({ status: 200, body: '' }); });
   await page.goto('http://game.local/');
-  await page.waitForFunction(()=>window.__AD&&window.__AD.G.mode==='title',null,{timeout:60000});
-  const ids=process.argv[2]?process.argv[2].split(','):await page.evaluate(()=>window.__AD.HEROES.map(h=>h.id));
-  for(const id of ids){
-    await page.evaluate(id=>{window.__AD.selected=id;window.__AD.startRun();window.__AD.input.autoFire=true;},id);
-    const tick=async(n)=>{for(let i=0;i<n;i++){await page.evaluate(()=>{const A=window.__AD,G=A.G,p=G.p;if(!p)return;p.hp=p.maxHp;
-      const e=G.enemies.slice().sort((a,b)=>Math.hypot(a.x-p.x,a.z-p.z)-Math.hypot(b.x-p.x,b.z-p.z))[0];
-      if(e){const W=A.world;const d=Math.hypot(e.x-p.x,e.z-p.z);if(d>8)for(let k=0;k<16;k++){const a=k/16*6.283,nx=e.x+Math.cos(a)*5,nz=e.z+Math.sin(a)*5;if(!W.grid[Math.floor(nz/2)*W.W+Math.floor(nx/2)]){p.x=nx;p.z=nz;break;}}const dx=e.x-p.x,dz=e.z-p.z,l=Math.hypot(dx,dz)||1;p.aimX=dx/l;p.aimZ=dz/l;}
-      if(Math.random()<0.3)A.useSpecial(); if(Math.random()<0.2)A.input.dash=true;
-      if(G.mode==='levelup'){const c=document.querySelectorAll('.card');c[Math.floor(Math.random()*c.length)].click();}});await page.waitForTimeout(300);}};
-    await tick(12);
-    await page.evaluate(()=>{window.__AD.killAll();});await tick(4);
-    const s1=await page.evaluate(()=>({mode:window.__AD.G.mode,portal:window.__AD.G.portalOpen,lvl:window.__AD.G.p.level}));
-    await page.evaluate(()=>{const A=window.__AD;A.G.mode='play';A.next();});await page.waitForTimeout(800);
-    await page.evaluate(()=>{const A=window.__AD;A.killAll();A.G.mode='play';A.next();});await page.waitForTimeout(800);
-    // floor 3 boss
-    await tick(6);
-    await page.evaluate(()=>{const A=window.__AD,G=A.G;if(G.boss){G.boss.aggro=true;const p=G.p;p.x=G.boss.x-6;p.z=G.boss.z;}});
-    await tick(6); await page.evaluate(()=>window.__AD.damageBoss(0.5)); await tick(6);
-    if(id===ids[0]) await page.screenshot({path:'boss_'+id+'.png'});
-    await page.evaluate(()=>window.__AD.damageBoss(0.6)); await page.evaluate(()=>window.__AD.killAll()); await tick(3);
-    const s2=await page.evaluate(()=>({mode:window.__AD.G.mode,floor:window.__AD.G.floor,boss:!!window.__AD.G.boss,portal:window.__AD.G.portalOpen,kills:window.__AD.G.kills,lvl:window.__AD.G.p.level,dmg:Math.round(window.__AD.G.dmgDealt)}));
-    console.log(id,JSON.stringify(s1),JSON.stringify(s2),'errs',errs.length);
+  await page.waitForFunction(() => window.__AD && window.__AD.G.mode === 'title', null, { timeout: 90000 });
+  const roster = await page.evaluate(() => window.__AD.HEROES.map(h => ({ id: h.id, name: h.name, cohort: h.cohort, line: [h.stats.hp, h.stats.atk, h.stats.spd, h.stats.def, h.x.label, h.x.v].join('/') })));
+  const fail = [];
+  const dup = (k) => roster.filter((r, i) => roster.findIndex(o => o[k] === r[k]) !== i).map(r => r[k]);
+  if (roster.length !== 28) fail.push('expected 28 agents, got ' + roster.length);
+  if (dup('name').length) fail.push('duplicate names: ' + dup('name'));
+  if (dup('line').length) fail.push('duplicate stat lines: ' + dup('line'));
+  const echoLines = roster.filter(r => r.cohort === 'echo').map(r => r.line.split('/').slice(0, 4).join('/'));
+  for (const r of roster.filter(r => r.cohort === 'origin')) if (echoLines.includes(r.line.split('/').slice(0, 4).join('/'))) fail.push('echo agent copies stats of ' + r.name);
+  const ids = process.argv[2] ? process.argv[2].split(',') : roster.map(r => r.id);
+  for (const id of ids) {
+    await page.evaluate(id => { window.__AD.selected = id; return window.__AD.startRun(); }, id);
+    await page.waitForFunction(() => window.__AD.G.mode === 'play', null, { timeout: 60000 });
+    const res = await page.evaluate(async () => {
+      const A = window.__AD, G = A.G, p = G.p, sleep = ms => new Promise(r => setTimeout(r, ms));
+      A.god(); A.input.autoFire = true; const used = {};
+      for (const k of ['rapid_fire', 'sweeping_arc', 'piercing_beam', 'area_pulse', 'summon', 'ultimate']) { p.cds[k] = 0; used[k] = A.move(k); await sleep(120); }
+      for (let i = 0; i < 6; i++) { A.killAll(); await sleep(150); if (G.mode === 'levelup') document.querySelector('.card').click(); }
+      A.solve(); A.toVault(); await sleep(900);
+      for (let i = 0; i < 12 && G.stage === 'boss'; i++) { A.damageBoss(0.2); await sleep(150); }
+      return { used, stage: G.stage, frame: p.sprite.frame };
+    });
+    const bad = Object.entries(res.used).filter(([, v]) => !v).map(([k]) => k);
+    console.log(id.padEnd(12), JSON.stringify(res));
+    if (bad.length) fail.push(`${id}: moves did not fire: ${bad}`);
+    if (res.stage !== 'portal') fail.push(`${id}: sector loop ended at ${res.stage}`);
+    await page.evaluate(() => { const A = window.__AD; A.G.mode = 'results'; });
   }
-  console.log(errs.slice(0,10).join('\n'));
-  await b.close();
+  if (errs.length) fail.push(...errs.slice(0, 10));
+  console.log(fail.length ? 'FAIL\n' + fail.join('\n') : `PASS · ${ids.length} agents, 28 unique names and stat lines`);
+  await b.close(); process.exit(fail.length ? 1 : 0);
 })();
