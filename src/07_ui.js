@@ -367,7 +367,7 @@ function ambient(dt, x, z, k = 1) {
 /* ---------- boot ---------- */
 async function boot() {
   show('#loading'); resize();
-  buildProceduralTextures(); buildMaterials(); initEnemyGeo(); initPropGeo(); initHud();
+  buildProceduralTextures(); buildMaterials(); initEnemyGeo(); initPropGeo(); initModelGeo(); initHud();
   try { await loadAtlases(f => { $('#loadFill').style.transform = `scaleX(${f})`; }); }
   catch (err) { $('#loadMsg').textContent = err.message + '. Reload the page to try again.'; return; }
   buildWorld(Math.floor(rand() * SECTORS.length));
@@ -381,4 +381,5 @@ boot();
 window.__AD = { G, input, startRun, HEROES, world, BATCH: () => BATCH, get selected() { return selected; }, set selected(v) { selected = v; },
   move: k => G.p && useMove(G.p, k), killAll: () => G.enemies.slice().forEach(e => { if (!e.boss && e.alive) killEnemy(e); }), next: () => nextFloor(),
   damageBoss: f => G.bosses.forEach(b => { if (b.alive) { b.invuln = 0; b.intro = 0; damageEnemy(b, b.maxHp * f, false); } }), toVault: () => { const [x, z] = roomCenter(world.vault); G.p.x = x - 6; G.p.z = z; },
-  toPortal: () => { G.p.x = world.portal.x; G.p.z = world.portal.z; }, solve: () => { for (const s of world.puzzle.steps) interactSwitch(world.switches.find(w => w.id === s)); }, god: () => { G.p.maxHp = G.p.hp = 99999; }, sector: n => startSector(n) };
+  toPortal: () => { G.p.x = world.portal.x; G.p.z = world.portal.z; }, solve: () => { for (const s of world.puzzle.steps) interactSwitch(world.switches.find(w => w.id === s)); }, god: () => { G.p.maxHp = G.p.hp = 99999; }, sector: n => startSector(n), spawnBoss: (id, dx = 0, dz = -7) => { const b = spawnBoss(id, G.p.x + dx, G.p.z + dz, 0, 1); b.intro = 0; b.invuln = 0; b.hp = b.maxHp = 1e9; G.stage = 'boss'; return b.uid; }, spawnCPU: (t, dx, dz) => spawnEnemy(t, G.p.x + dx, G.p.z + dz).uid,
+  clearBosses: () => { G.enemies.filter(e => e.boss).forEach(removeEnemyVisuals); G.enemies = G.enemies.filter(e => !e.boss); G.bosses = []; G.corpses.forEach(c => removeEnemyVisuals(c.e)); G.corpses = []; ringPool.forEach(r => { r.alive = false; r.m.visible = false; }); } };

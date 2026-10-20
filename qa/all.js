@@ -33,8 +33,10 @@ const ROOT = path.resolve(__dirname, '..'), TN = path.resolve(ROOT, 'node_module
       A.god(); A.input.autoFire = true; const used = {};
       for (const k of ['rapid_fire', 'sweeping_arc', 'piercing_beam', 'area_pulse', 'summon', 'ultimate']) { p.cds[k] = 0; used[k] = A.move(k); await sleep(120); }
       for (let i = 0; i < 6; i++) { A.killAll(); await sleep(150); if (G.mode === 'levelup') document.querySelector('.card').click(); }
-      A.solve(); A.toVault(); await sleep(900);
-      for (let i = 0; i < 12 && G.stage === 'boss'; i++) { A.damageBoss(0.2); await sleep(150); }
+      A.solve(); for (let i = 0; i < 40 && G.stage !== 'gate'; i++) { A.killAll(); await sleep(100); }
+      A.toVault(); for (let i = 0; i < 40 && G.stage !== 'boss'; i++) await sleep(100);
+      for (let i = 0; i < 12 && G.bosses.some(b => b.alive); i++) { A.damageBoss(0.2); await sleep(150); }
+      for (let i = 0; i < 60 && G.stage === 'boss'; i++) await sleep(100); // headless frames are slow; let the stage advance
       return { used, stage: G.stage, frame: p.sprite.frame };
     });
     const bad = Object.entries(res.used).filter(([, v]) => !v).map(([k]) => k);

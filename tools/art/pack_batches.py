@@ -5,9 +5,8 @@ usage: python3 -I tools/art/pack_batches.py <dir containing the extracted Batch_
 Writes into atlas/:
   agents/<id>.webp   148 frames, 12 cols x 13 rows, 168px cells (see FRAME_LAYOUT)
   fx/<id>.webp       7 moves x (projectile, muzzle, trail, impact) x 4 frames, 128px cells
-  bosses.webp        10 bosses x (4 idle + 16 state + 4 signature fx), 128px cells
-  enemies.webp       12 CPU classes x 4 frames, 64px cells
   batch.json         combat data (moves, muzzles), boss/enemy/dungeon metadata
+                     (bosses and CPU units are rendered as procedural 3D rigs in src/05b_models.js)
 """
 import glob, json, os, sys
 from PIL import Image
@@ -112,14 +111,12 @@ def pack_bosses_enemies():
         for i, c in enumerate(cells):
             k = b * 24 + i; atlas.alpha_composite(c, ((k % 16) * 128, (k // 16) * 128))
         meta.append({k: boss[k] for k in ('id', 'name', 'subtitle', 'color', 'accent', 'visual')} | {'base': b * 24})
-    save_webp(atlas, os.path.join(OUT, 'bosses.webp'))
     en = Image.new('RGBA', (8 * 64, 6 * 64)); emeta = []
     for e, enemy in enumerate(m8['enemies']):
         strip = Image.open(os.path.join(B08, enemy['atlas'])).convert('RGBA')
         for f in range(4):
             k = e * 4 + f; en.alpha_composite(strip.crop((f * 64, 0, f * 64 + 64, 64)), ((k % 8) * 64, (k // 8) * 64))
         emeta.append({k: enemy[k] for k in ('id', 'name', 'color', 'ai', 'hp', 'mobile')} | {'base': e * 4})
-    save_webp(en, os.path.join(OUT, 'enemies.webp'))
     print('bosses', atlas.size, 'enemies', en.size)
     return meta, emeta, m8['dungeons']
 

@@ -99,13 +99,10 @@ function spawnFauna(type, x, z, group = 0) {
   G.enemies.push(e); return e;
 }
 function spawnCPU(type, x, z, group = 0) {
-  const def = CPU_DEFS[type], meta = BATCH.enemies.find(m => m.id === type);
-  const tex = SHEETS.enemies.tex.clone(); tex.needsUpdate = true;
-  const mat = pixelSpriteMat(tex, { dissolveCol: hexInt(meta.color) }); const spr = new THREE.Sprite(mat);
-  spr.center.set(0.5, 1 - 59 / 64); spr.renderOrder = 5; spr.scale.setScalar(def.scale); scene.add(spr);
-  const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: TEX.glow, color: hexInt(meta.color), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.22 })); glow.scale.setScalar(def.scale * 0.9); scene.add(glow);
+  const def = CPU_DEFS[type], meta = BATCH.enemies.find(m => m.id === type), color = hexInt(meta.color);
+  const model = buildCpuModel(type, color); const sc = def.scale / 2; model.root.scale.setScalar(sc); model.root.position.set(x, 0, z); scene.add(model.root);
   const hp = def.hp * sectorScale();
-  const e = baseEnemy({ fam: 'cpu', type, def: { ...def, name: meta.name }, meta, x, z, r: def.radius, hp, maxHp: hp, spr, mat, tex, glow, touch: def.touch * dmgScale(), group, color: hexInt(meta.color), frame: -1, seed: Math.floor(rand() * 1000), ai: CPU_AI[type] });
+  const e = baseEnemy({ fam: 'cpu', type, def: { ...def, name: meta.name }, meta, x, z, r: def.radius, hp, maxHp: hp, root: model.root, model, mats: model.mats, touch: def.touch * dmgScale(), group, color, seed: Math.floor(rand() * 1000), ai: CPU_AI[type], yaw: rand() * 6.28, sc });
   G.enemies.push(e); return e;
 }
 function spawnEnemy(type, x, z, group = 0) { return ENEMY_DEFS[type] ? spawnFauna(type, x, z, group) : spawnCPU(type, x, z, group); }
@@ -145,7 +142,7 @@ function killEnemy(e) {
   if (e.boss || e.rival) for (let i = 0; i < 2; i++) spawnPickup(e.x + rr(-2, 2), e.z + rr(-2, 2));
 }
 function removeEnemyVisuals(e) {
-  if (e.root) { scene.remove(e.root); e.mats.forEach(m => m.dispose()); }
+  if (e.root) { scene.remove(e.root); e.mats.forEach(m => m.dispose()); if (e.debris) e.debris.forEach(d => d.o.material && d.o.material.dispose()); }
   if (e.spr) { scene.remove(e.spr); e.mat.dispose(); e.tex.dispose(); }
   if (e.glow) scene.remove(e.glow);
   if (e.agent) e.agent.dispose();
@@ -157,9 +154,13 @@ function updateCorpses(dt) {
     c.t += dt; const k = c.t / c.dur, e = c.e;
     if (e.mat) { e.mat.userData.u.uDissolve.value = k; e.mat.userData.u.uFlash.value = Math.max(0, 0.6 - k); }
     if (e.agent) e.agent.mat.userData.u.uDissolve.value = Math.max(0, k * 1.2 - 0.2);
-    if (e.root) { e.root.scale.setScalar(Math.max(0.01, 1 - k)); e.root.position.y = k * 0.5; }
+    if (e.model) {
+      if (!e.debris) { e.debris = shatterModel(e.root, e.boss ? 7 : 5); flashModel(e.mats, 0); }
+      tickShatter(e.debris, dt, k);
+      if (e.boss && rand() < dt * 30) particles.emit(e.x + rr(-2, 2), rr(0.5, 4), e.z + rr(-2, 2), e.accent, 4, { speed: 6, life: 0.6, size: 0.4 });
+      if (e.boss && e.light) e.light.intensity = 80 * (1 - k);
+    } else if (e.root) { e.root.scale.setScalar(Math.max(0.01, 1 - k)); e.root.position.y = k * 0.5; }
     if (e.glow) e.glow.material.opacity *= 0.9;
-    if (e.boss && e.spr) bossSetFrame(e, 16 + Math.min(3, Math.floor(k * 4)));
     if (k >= 1) { removeEnemyVisuals(e); c.done = true; }
   }
   G.corpses = G.corpses.filter(c => !c.done);
@@ -445,15 +446,14 @@ function updateEnemies(dt) {
       animateFauna(e);
       for (const m of e.mats) m.emissiveIntensity = e.flash > 0 ? 6 : m.userData.baseEI * (e.confused > 0 ? 1.5 + Math.sin(G.time * 20) : 1) * (s.mark > 0 || e.reveal > 0 ? 1.4 : 1);
     } else {
-      const fi = e.meta.base + (Math.floor(e.t * (e.def.speed > 0 && Math.hypot(e.vx, e.vz) > 0.4 ? 8 : 4)) % 4);
-      if (fi !== e.frame) { frameUV(e.tex, 8, 6, fi); e.frame = fi; }
-      const face = (e.aggro ? dx : e.vx) < 0 ? -1 : 1, bob = e.def.flying ? 0.5 + Math.sin(e.t * 4) * 0.15 : 0;
-      const atk = (e.atkT = Math.max(0, (e.atkT || 0) - dt)) > 0 ? 1.08 : 1;
-      e.spr.scale.set(e.def.scale * face * atk, e.def.scale / atk ** 0.5, 1); e.spr.position.set(e.x, bob, e.z);
-      e.glow.position.set(e.x, 0.9 + bob, e.z);
-      const u = e.mat.userData.u; u.uFlash.value = e.flash > 0 ? 0.85 : e.state === 'fuse' ? 0.4 : 0;
-      u.uFlashCol.value.set(e.flash > 0 ? 0xffffff : e.color);
-      e.mat.color.setScalar(1); if (e.confused > 0) e.mat.color.setRGB(1, 0.7, 1); else if (s.slow > 0) e.mat.color.setRGB(0.75, 0.85, 1.2); else if (s.mark > 0) e.mat.color.setRGB(1.15, 1.1, 0.8);
+      const tgYaw = Math.atan2(e.aggro ? dx : e.vx, e.aggro ? dz : e.vz);
+      e.yaw = lerpAngle(e.yaw, tgYaw, 1 - Math.exp(-dt * 9));
+      if (e.model.P.yawOnly) e.model.P.yawOnly.rotation.y = e.yaw; else e.model.yawNode.rotation.y = e.yaw;
+      e.root.position.set(e.x, 0, e.z);
+      e.atkT = Math.max(0, (e.atkT || 0) - dt);
+      e.model.anim({ t: e.t, speed: Math.hypot(e.vx, e.vz), atk: e.atkT / 0.3, stagger: e.flash > 0, fuse: e.state === 'fuse' }, dt);
+      const tint = e.confused > 0 ? 0xe28aff : s.slow > 0 ? 0x8fb0ff : s.mark > 0 ? 0xffe066 : s.bleed > 0 ? 0xff4a4a : null;
+      if (e.flash > 0) flashModel(e.mats, 1); else if (e.state === 'fuse') flashModel(e.mats, 0.5 + Math.sin(G.time * 40) * 0.5, 0xffae44); else if (tint && Math.sin(G.time * 6) > 0) flashModel(e.mats, 0.25, tint); else flashModel(e.mats, 0);
     }
     e.shadow.position.set(e.x, 0.03, e.z);
   }
@@ -461,42 +461,46 @@ function updateEnemies(dt) {
 }
 
 /* ---------- bosses ---------- */
-function bossSetFrame(e, local) { const idx = e.meta.base + local; if (idx !== e.frame) { frameUV(e.tex, 16, 15, idx); e.frame = idx; } }
 function spawnBoss(id, x, z, idx, count) {
   const meta = BATCH.bosses.find(b => b.id === id), col = hexInt(meta.color), acc = hexInt(meta.accent);
-  const tex = SHEETS.bosses.tex.clone(); tex.needsUpdate = true;
-  const mat = pixelSpriteMat(tex, { dissolveCol: acc, gain: 1 }); const spr = new THREE.Sprite(mat);
-  spr.center.set(0.5, 1 - 116 / 128); spr.renderOrder = 5; const S = 7.5; spr.scale.setScalar(S); scene.add(spr);
-  const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: TEX.glow, color: col, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.35 })); glow.scale.setScalar(S * 1.2); scene.add(glow);
-  const light = new THREE.PointLight(col, 40, 22, 1.4); scene.add(light);
-  const ring = new THREE.Mesh(G3.plane, decalRingMat(acc, 8)); ring.scale.setScalar(6.5); ring.renderOrder = 2; scene.add(ring);
-  const sig = new THREE.Sprite(pixelSpriteMat((() => { const t = SHEETS.bosses.tex.clone(); t.needsUpdate = true; return t; })(), { gain: 1.3 })); sig.visible = false; sig.renderOrder = 8; scene.add(sig);
+  const model = buildBossModel(id); model.root.position.set(x, 0, z); scene.add(model.root);
+  const light = new THREE.PointLight(acc, 16, 22, 1.4); scene.add(light);
+  const ring = new THREE.Mesh(G3.plane, decalRingMat(acc, 8)); ring.scale.setScalar(5); ring.renderOrder = 2; ring.visible = false; scene.add(ring);
   const hp = (900 + (G.floor - 1) * 260) * (count > 1 ? 0.72 : 1) * (1 + idx * 0.08);
-  const e = baseEnemy({ fam: 'boss', boss: true, type: id, meta, def: { name: meta.name, boss: true, elite: true, xp: 60, score: 1500, speed: 2.4, heavy: true }, x, z, r: 2, hp, maxHp: hp, spr, mat, tex, glow, light, ring, sig, sigT: 1, extra: [glow, light, ring, sig],
-    color: col, accent: acc, name: meta.name, sub: meta.subtitle, phase: 1, cycle: idx, frame: -1, anim: 'idle', animT: 0, scaleS: S, touch: 18 * dmgScale(), atkT: 2.5 + idx * 1.2, volleyT: 1.5 + idx, intro: 1.6, status: BOSS_STATUS[id], spiralA: 0 });
-  e.invuln = 1.6; bossSetFrame(e, 12);
+  const e = baseEnemy({ fam: 'boss', boss: true, type: id, meta, def: { name: meta.name, boss: true, elite: true, xp: 60, score: 1500, speed: 2.4, heavy: true }, x, z, r: 2, hp, maxHp: hp, root: model.root, model, mats: model.mats, light, ring, extra: [light, ring],
+    color: col, accent: acc, name: meta.name, sub: meta.subtitle, phase: 1, cycle: idx, anim: 'idle', animT: 0, animDur: 1, touch: 18 * dmgScale(), atkT: 2.5 + idx * 1.2, volleyT: 1.5 + idx, intro: 1.8, status: BOSS_STATUS[id], spiralA: 0, yaw: 0 });
+  e.invuln = 1.8; e.shadow.scale.set(7.5, 5.2, 1);
+  shockRing(x, z, 5, acc, 0.7); particles.emit(x, 0.3, z, acc, 60, { speed: 10, life: 0.9, size: 0.45, up: 0.4 });
   G.enemies.push(e); G.bosses.push(e); return e;
 }
 function bossAnim(e, name, dur) { e.anim = name; e.animT = 0; e.animDur = dur; }
 function bossOnHit(e, d) { if (e.anim === 'idle' && d > e.maxHp * 0.012) bossAnim(e, 'stagger', 0.33); }
+/* signature hit: element burst at the strike point */
 function bossSigFx(e, x, z, size) {
-  const s = e.sig; if (!s) return; s.visible = true; e.sigT = 0; s.position.set(x, 1.4, z); s.scale.setScalar(size); e.sigPos = [x, z];
+  const c = e.accent, fx = e.model.fx;
+  shockRing(x, z, size * 0.6, c, 0.45); shockRing(x, z, size * 0.35, 0xffffff, 0.3);
+  const n = Math.round(14 + size * 4);
+  if (fx === 'fire') particles.emit(x, 0.3, z, 0xff7a2a, n, { speed: 5, life: 0.8, size: 0.5, grav: -4, lift: 3 });
+  else if (fx === 'frost') particles.emit(x, 0.5, z, 0xd4f9ff, n, { speed: 7, life: 0.6, size: 0.3, grav: 6, lift: 4 });
+  else if (fx === 'toxic') particles.emit(x, 0.2, z, 0xb8ff4a, n, { speed: 3, life: 1.1, size: 0.55, grav: -1, lift: 1 });
+  else if (fx === 'void') { for (let i = 0; i < n; i++) { const a = rand() * 6.28, r = size * 0.6; particles.emit(x + Math.cos(a) * r, 0.6, z + Math.sin(a) * r, c, 1, { speed: 0.3, life: 0.5, size: 0.35, grav: 0, dir: [-Math.cos(a) * r * 2, -Math.sin(a) * r * 2] }); } }
+  else if (fx === 'light') { particles.emit(x, 0.3, z, 0xfff6c8, n, { speed: 2, life: 0.9, size: 0.4, grav: -8, lift: 6, spreadPos: size * 0.3 }); }
+  else { particles.emit(x, 0.5, z, c, n, { speed: 8, life: 0.45, size: 0.35, up: 1.5 }); if (e.type === 'storm_colossus' || e.type === 'core_tyrant') for (let i = 0; i < 3; i++) { const a = rand() * 6.28; zap(jagged(x, z, x + Math.cos(a) * size * 0.6, z + Math.sin(a) * size * 0.6, 5, 0.4), c, 0.5); } }
 }
 function bossUpdate(e, dt) {
   const p = G.p, dx = p.x - e.x, dz = p.z - e.z, dist = Math.hypot(dx, dz) || 0.01;
   e.t += 0; e.animT += dt;
   // animation
-  if (e.intro > 0) { e.intro -= dt; bossSetFrame(e, 12 + Math.min(3, Math.floor((1.6 - e.intro) / 0.4))); }
-  else if (e.anim !== 'idle') { const row = { attack: 4, stagger: 8, phase: 12 }[e.anim]; bossSetFrame(e, row + Math.min(3, Math.floor(e.animT / e.animDur * 4))); if (e.animT >= e.animDur) e.anim = 'idle'; }
-  else bossSetFrame(e, Math.floor(G.time * 5.2 + e.cycle) % 4);
+  if (e.anim !== 'idle' && e.animT >= e.animDur) e.anim = 'idle';
+  bossVisual(e, dt, dx, dz);
   // phases (Batch 09: 66% / 33%)
   const frac = e.hp / e.maxHp, ph = frac < 0.33 ? 3 : frac < 0.66 ? 2 : 1;
   if (ph !== e.phase) {
-    e.phase = ph; bossAnim(e, 'phase', 1.25); e.invuln = 1.0; showBanner(e.name, ph === 3 ? 'Final phase' : 'Phase 2'); shakeAdd(0.9); AUDIO.sfx.boss();
+    e.phase = ph; bossAnim(e, 'phase', 1.25); setModelPhase(e.model, ph); e.invuln = 1.0; showBanner(e.name, ph === 3 ? 'Final phase' : 'Phase 2'); shakeAdd(0.9); AUDIO.sfx.boss();
     shockRing(e.x, e.z, 9, e.accent, 0.6); if (dist < 7) { p.vx += dx / dist * 18; p.vz += dz / dist * 18; }
     const adds = BOSS_ADDS[e.type]; for (let i = 0; i < 1 + ph; i++) { const a = rand() * 6.28; const sx = e.x + Math.cos(a) * 4, sz = e.z + Math.sin(a) * 4; if (!solidAt(sx, sz)) { const n = spawnEnemy(adds[i % adds.length], sx, sz, 900 + e.cycle); n.aggro = true; } }
   }
-  if (e.intro > 0) { e.spr.position.set(e.x, 0, e.z); return; }
+  if (e.intro > 0) { e.intro -= dt; return; }
   // movement: hold mid-range, strafe
   const want = 7.5; let mx = 0, mz = 0;
   if (!(e.st.stun > 0)) { if (dist > want + 1.5) { mx = dx / dist; mz = dz / dist; } else if (dist < want - 2) { mx = -dx / dist; mz = -dz / dist; } else { mx = -dz / dist * 0.6; mz = dx / dist * 0.6; } }
@@ -524,17 +528,26 @@ function bossUpdate(e, dt) {
     } else { const n = 10 + e.phase * 4, off = rand() * 6; for (let i = 0; i < n; i++) fireEnemyBullet(e.x, e.z, off + i / n * 6.283, 6 + e.phase, dmg * 0.55, e.color, 1.1); }
     AUDIO.sfx.eshot();
   }
-  // visuals
-  const flash = e.flash = Math.max(0, e.flash - dt), u = e.mat.userData.u;
-  u.uFlash.value = flash > 0 ? 0.7 : e.invuln > 0 ? 0.25 + Math.sin(G.time * 30) * 0.15 : 0; u.uFlashCol.value.set(flash > 0 ? 0xffffff : e.accent);
-  const face = dx < 0 ? -1 : 1, breathe = 1 + Math.sin(G.time * 2) * 0.015;
-  e.spr.scale.set(e.scaleS * face, e.scaleS * breathe, 1); e.spr.position.set(e.x, 0.15 + Math.sin(G.time * 1.6) * 0.12, e.z);
-  e.glow.position.set(e.x, 3, e.z); e.glow.material.opacity = 0.28 + Math.sin(G.time * 3) * 0.08 + (e.anim === 'attack' ? 0.2 : 0);
-  e.light.position.set(e.x, 3.5, e.z); e.light.intensity = 36 + (e.anim === 'attack' ? 30 : 0) + Math.sin(G.time * 4) * 6;
-  e.ring.position.set(e.x, 0.06, e.z); e.ring.scale.setScalar(6.5 + e.phase * 0.8);
-  e.shadow.position.set(e.x, 0.03, e.z); e.shadow.scale.set(5.5, 3.6, 1);
-  if (e.sig.visible) { e.sigT += dt; const f = Math.min(3, Math.floor(e.sigT / 0.09)); const t = e.sig.material.map; frameUV(t, 16, 15, e.meta.base + 20 + f); e.sig.material.opacity = 1 - e.sigT / 0.4; if (e.sigT > 0.4) e.sig.visible = false; }
-  if (rand() < dt * 10) particles.emit(e.x + rr(-2, 2), rr(0.5, 4), e.z + rr(-1, 1), e.accent, 1, { speed: 0.6, life: 1, size: 0.3, grav: -1, lift: 0.6 });
+}
+function bossVisual(e, dt, dx, dz) {
+  const M = e.model, k = e.anim === 'idle' ? 0 : clamp(e.animT / e.animDur, 0, 1);
+  e.yaw = lerpAngle(e.yaw, Math.atan2(dx, dz), 1 - Math.exp(-dt * (e.anim === 'attack' ? 2 : 4)));
+  e.model.yawNode.rotation.y = e.yaw;
+  // intro: rises out of the floor; phase: lifts and spins up
+  const intro = e.intro > 0 ? 1 - e.intro / 1.8 : 1, lift = e.anim === 'phase' ? Math.sin(k * Math.PI) * 1.2 : 0;
+  e.root.position.set(e.x, (intro - 1) * 5 + lift, e.z);
+  if (e.anim === 'phase') e.model.yawNode.rotation.y += Math.sin(k * Math.PI) * Math.PI * 2 * k;
+  M.anim({ t: G.time + e.cycle * 3, speed: Math.hypot(e.vx, e.vz), state: e.anim, k, phase: e.phase }, dt);
+  if (M.emit) { const [x, y, z] = M.emit; particles.emit(e.x + x, y, e.z + z, M.fx === 'fire' ? (rand() < 0.5 ? 0xff6331 : 0xffd35f) : e.accent, 1, { speed: 0.8, life: 1.0, size: 0.45, grav: -3, lift: 2 }); M.emit = null; }
+  if (M.fx === 'frost' && rand() < dt * 20) particles.emit(e.x + rr(-3, 3), rr(0.5, 4), e.z + rr(-3, 3), 0xd4f9ff, 1, { speed: 0.3, life: 1.4, size: 0.18, grav: 1.5, lift: 0 });
+  if (M.fx === 'toxic' && rand() < dt * 12) particles.emit(e.x + rr(-2, 2), 0.3, e.z + rr(-3, 1), 0xb8ff4a, 1, { speed: 0.2, life: 1.6, size: 0.5, grav: -0.6, lift: 0.5 });
+  if (M.fx === 'void' && rand() < dt * 20) { const a = rand() * 6.28; particles.emit(e.x + Math.cos(a) * 5, 3.4, e.z + Math.sin(a) * 5, e.accent, 1, { speed: 0.2, life: 0.8, size: 0.3, grav: 0, dir: [-Math.cos(a) * 6, -Math.sin(a) * 6] }); }
+  if (rand() < dt * 8) particles.emit(e.x + rr(-2, 2), rr(0.5, 4), e.z + rr(-1, 1), e.accent, 1, { speed: 0.6, life: 1, size: 0.3, grav: -1, lift: 0.6 });
+  e.flash = Math.max(0, e.flash - dt);
+  if (e.flash > 0) flashModel(e.mats, 1); else if (e.invuln > 0 && e.intro <= 0) flashModel(e.mats, 0.35 + Math.sin(G.time * 30) * 0.25, e.accent); else if (e.anim === 'attack') flashModel(e.model.glows, 0.6 + Math.sin(k * Math.PI), e.accent); else flashModel(e.mats, 0);
+  e.light.position.set(e.x + 2.5, 6.5, e.z + 3); e.light.intensity = 16 + (e.anim === 'attack' ? 22 * Math.sin(k * Math.PI) : 0) + Math.sin(G.time * 4) * 2;
+  e.ring.position.set(e.x, 0.06, e.z); e.ring.scale.setScalar(4.6 + e.phase * 0.6);
+  e.shadow.position.set(e.x, 0.03, e.z);
 }
 
 /* ---------- Four Locks rival guardians: corrupted agents ---------- */

@@ -112,7 +112,7 @@ const rgbOf = hex => { const c = new THREE.Color(hex); return [c.r * 255, c.g * 
 const BIOMES = {
   core_facility:   { floor:'panel',   wall:'tech',     base:'#2a3f52', dark:'#0f1a24', glow:'#21c8f1', accent:'#ce983e', fog:0x050b12, fogD:0.024, hemi:[0x7fb6d8, 0x10161c], rough:0.55, metal:0.55, particle:'motes', light:0x48d8ff },
   shadow_realm:    { floor:'flag',    wall:'obsidian', base:'#5a4688', dark:'#1c1434', glow:'#ad6bfa', accent:'#f3a2ff', fog:0x08051a, fogD:0.03,  hemi:[0x9b7fd8, 0x140c1c], rough:0.7,  metal:0.2,  particle:'wisps', light:0xb67bff },
-  voltage_foundry: { floor:'diamond', wall:'plating',  base:'#3b424b', dark:'#14171b', glow:'#3cc6ff', accent:'#ffc33e', fog:0x070a0e, fogD:0.025, hemi:[0x98b4cc, 0x1a1610], rough:0.45, metal:0.8,  particle:'sparks', light:0x7fd8ff },
+  voltage_foundry: { floor:'diamond', wall:'plating',  base:'#5a6572', dark:'#1c2026', glow:'#3cc6ff', accent:'#ffc33e', fog:0x070a0e, fogD:0.025, hemi:[0x98b4cc, 0x1a1610], rough:0.45, metal:0.8,  particle:'sparks', light:0x7fd8ff },
   inferno_depths:  { floor:'basalt',  wall:'basalt',   base:'#4a2c26', dark:'#170807', glow:'#ff7233', accent:'#f8ce6a', fog:0x140503, fogD:0.028, hemi:[0xffa070, 0x200805], rough:0.85, metal:0.1,  particle:'embers', light:0xff7a33 },
   glacial_vault:   { floor:'ice',     wall:'ice',      base:'#5c8ea8', dark:'#16303f', glow:'#8ae4ff', accent:'#d4f9ff', fog:0x0a1820, fogD:0.026, hemi:[0xbfe8ff, 0x10202a], rough:0.18, metal:0.05, particle:'snow', light:0x9fe8ff },
   toxic_hive:      { floor:'hive',    wall:'resin',    base:'#4f6a3a', dark:'#141f0f', glow:'#9bea52', accent:'#e1e87d', fog:0x081106, fogD:0.03,  hemi:[0xb8e090, 0x0d1408], rough:0.6,  metal:0.1,  particle:'spores', light:0xa8f060 },
@@ -304,7 +304,7 @@ function pixelSpriteMat(tex, o = {}) {
 const ART = {};        // legacy card parts: ART[heroId][name] = { tex, w, h, canvas }
 let MANIFEST = null;   // legacy card rects
 let BATCH = null;      // atlas/batch.json
-const SHEETS = {};     // shared sprite sheets: thumbs, bosses, enemies
+const SHEETS = {};     // shared sprite sheets: roster thumbnails
 const AGENT_TEX = {};  // per-agent { body, fx } textures (lazy)
 function loadImage(url) { return new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('Could not load ' + url)); i.src = url; }); }
 function sheetTex(img, pixel) {
@@ -315,7 +315,7 @@ function sheetTex(img, pixel) {
 async function loadAtlases(onProgress) {
   const [man, batch] = await Promise.all([fetch('atlas/manifest.json').then(r => r.json()), fetch('atlas/batch.json').then(r => r.json())]);
   MANIFEST = man; BATCH = batch;
-  const ids = Object.keys(MANIFEST); const extra = ['thumbs', 'bosses', 'enemies']; let done = 0; const total = ids.length + extra.length;
+  const ids = Object.keys(MANIFEST); const extra = ['thumbs']; let done = 0; const total = ids.length + extra.length;
   const tick = () => { done++; onProgress && onProgress(done / total); };
   await Promise.all([
     ...ids.map(async id => {

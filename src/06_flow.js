@@ -225,10 +225,14 @@ function openPortal() {
 /* ---------- camera ---------- */
 const camState = { x: 0, z: 0, h: 20 };
 function updateCamera(dt) {
-  const p = G.p; const portrait = window.innerWidth < window.innerHeight;
-  const look = 1.6; const tx = p.x + p.aimX * look, tz = p.z + p.aimZ * look;
+  const p = G.p;
+  if (G.camOverride) { const o = G.camOverride; camera.position.set(p.x + o[0], o[1], p.z + o[2]); camera.lookAt(p.x + o[3], o[4], p.z + o[5]); return; } const portrait = window.innerWidth < window.innerHeight;
+  const look = 1.6; let tx = p.x + p.aimX * look, tz = p.z + p.aimZ * look;
+  // boss fights: frame the agent and the nearest guardian together
+  const b = G.bosses.filter(b => b.alive).sort((a, c) => Math.hypot(a.x - p.x, a.z - p.z) - Math.hypot(c.x - p.x, c.z - p.z))[0];
+  if (b && Math.hypot(b.x - p.x, b.z - p.z) < 22) { tx = lerp(tx, b.x, 0.4); tz = lerp(tz, b.z - 4, 0.45); }
   camState.x = lerp(camState.x, tx, 1 - Math.exp(-dt * 6)); camState.z = lerp(camState.z, tz, 1 - Math.exp(-dt * 6));
-  const want = (portrait ? 17 : 20) + (G.stage === 'boss' ? 3 : 0); camState.h = lerp(camState.h, want, 1 - Math.exp(-dt * 2));
+  const want = (portrait ? 17 : 20) + (G.stage === 'boss' ? 5 : 0); camState.h = lerp(camState.h, want, 1 - Math.exp(-dt * 2));
   const H = camState.h, B = H * (portrait ? 0.44 : 0.5);
   const tr = G.shake * G.shake, sx = (rand() - 0.5) * tr * 1.2, sz = (rand() - 0.5) * tr * 1.2;
   camera.position.set(camState.x + sx, H, camState.z + B + sz);

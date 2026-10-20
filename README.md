@@ -65,7 +65,8 @@ Eight sectors in four Locks, each a branching dungeon: a threshold, an upper and
 
 - **CPU faction:** 12 archetypes (drone, infantry, turret, hunter, brute, mage, sniper, shield, healer, flyer, bomber, elite) with their own tactics, coordinated by a squad director (vanguard, flankers, suppressor, support, reserve; advance / pin / encircle / recover / rush). Glitch fauna (bugs, spam bots, hallucinations, prompt injections, rate limiters) mix in.
 - **Circuit puzzle:** two relays per sector must be used in the right order. Solving it shuts the traps down and cracks open the sealed annex with a cache (heal, overclock, free upgrade).
-- **Vault:** clear both passages (and the rival, if present) to open the gates. Bosses fight in three phases with telegraphed lanes, rings, circles and cones, bullet volleys, adds and their own status effects, animated through attack, stagger, phase and death states.
+- **Vault:** clear both passages (and the rival, if present) to open the gates. Bosses fight in three phases with telegraphed lanes, rings, circles and cones, bullet volleys, adds and their own status effects.
+- **Bosses and CPU units are procedural 3D rigs** (`src/05b_models.js`), modelled on the Batch 08 concept board: panel-lined PBR armour with rim lighting, per-boss signature parts (Core Tyrant's gatlings and reactor, Shadow Weaver's blade legs, Storm Colossus's tesla horns, Inferno Queen's flame wings, Frost Warden's serpent body, Toxic Broodlord's carapace, Void Archon's eye and tentacles, Time Keeper's working clock, Nexus Angel's wings and spear, Final Sentinel's orbiting blades and final-form wings). They animate through idle, walk, attack, stagger, phase and death (parts shatter and tumble), shift palette each phase, and lean toward the camera so their fronts read from the top-down view.
 - **Rivals:** the Four Locks guardians are corrupted copies of other agents from the roster, guarding the upper relay.
 
 ## Repo layout
@@ -78,8 +79,6 @@ icons/                  PWA icons (tools/art/make_icons.py)
 atlas/
   agents/<id>.webp      148-frame sprite sheets, one per agent (lazy-loaded)
   fx/<id>.webp          7 moves × projectile/muzzle/trail/impact × 4 frames
-  bosses.webp           10 bosses: idle, attack, stagger, phase, death, signature FX
-  enemies.webp          12 CPU classes
   thumbs.webp           roster thumbnails
   <id>.webp             Origin card art (portraits, icons, ultimate FX)
   batch.json            frame layout, muzzles, move data, boss/enemy metadata
@@ -89,6 +88,7 @@ src/
   03_world.js           branching sector generator, biome prop kits, gates, seal, switches, traps
   04_actors.js          8-direction animation, moves, projectiles, statuses, summons
   05_enemies.js         fauna, CPU tactics + squad director, telegraphs, bosses, rivals
+  05b_models.js         procedural 3D rigs for the 10 bosses and 12 CPU units
   06_flow.js            pickups, traps, puzzle, cache, sector progression, player controller, camera
   07_ui.js              screens, HUD, minimap, input, main loop, PWA hooks
   template.html         markup + CSS; build.py inlines src/*.js
@@ -106,6 +106,6 @@ node qa/play.js desktop caret 2        # scripted playthrough with screenshots (
 ./tools/art/make_art.sh <batch-dir>    # rebuild every atlas from art/source + the extracted Batch 04–09 zips
 ```
 
-Everything except the character, enemy and boss sprites is generated in code: biome floor and wall PBR maps (albedo, normal, roughness, emissive), dungeon layouts, prop kits, gates, traps, telegraphs, particles, sound effects and music. Three.js `0.170.0` loads from jsDelivr via an import map.
+Everything except the agent sprites is generated in code: bosses and CPU units, biome floor and wall PBR maps (albedo, normal, roughness, emissive), dungeon layouts, prop kits, gates, traps, telegraphs, particles, sound effects and music. Three.js `0.170.0` loads from jsDelivr via an import map.
 
 The Batch 04–09 art is procedurally posed and fan-made, as its own READMEs note: rear facings are approximations and the mascots are not official vendor art.

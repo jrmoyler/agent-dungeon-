@@ -259,7 +259,7 @@ function biomeSurface(bk) {
   const B = BIOMES[bk], maps = biomeMaps(bk), glow = new THREE.Color(B.glow);
   const floor = new THREE.MeshStandardMaterial({ ...maps.floor, color: 0xffffff, metalness: B.metal, roughness: 1, emissive: 0xffffff, emissiveIntensity: 0.55, normalScale: new THREE.Vector2(1.2, 1.2) });
   const side = new THREE.MeshStandardMaterial({ ...maps.wall, color: 0xffffff, metalness: B.metal * 0.6, roughness: 1, emissive: 0xffffff, emissiveIntensity: 1.1 });
-  const top = new THREE.MeshStandardMaterial({ ...maps.wall, color: 0x9aa2b4, roughness: 1, metalness: B.metal * 0.5, emissive: 0xffffff, emissiveIntensity: 0.35, normalScale: new THREE.Vector2(0.8, 0.8) });
+  const top = new THREE.MeshStandardMaterial({ ...maps.wall, color: 0xd2d8e6, roughness: 1, metalness: B.metal * 0.4, emissive: 0xffffff, emissiveIntensity: 0.55, normalScale: new THREE.Vector2(0.8, 0.8) });
   const seal = new THREE.MeshStandardMaterial({ ...maps.wall, color: 0xb0b0b0, roughness: 1, emissive: glow, emissiveIntensity: 0.4 });
   return { floor, wall: [side, side, top, top, side, side], seal };
 }
@@ -276,7 +276,7 @@ function buildWorld(secIndex, seed = (Math.random() * 1e9) | 0) {
   Object.assign(world, { W: d.W, H: d.H, grid: d.grid, rooms: d.rooms, start: d.start, vault: d.vault, biome: bk, sector: sec, gateOpen: false, sealOpen: false });
   world.explored = new Uint8Array(d.W * d.H);
   const grp = new THREE.Group(); world.group = grp; scene.add(grp);
-  scene.fog.color.setHex(B.fog); scene.fog.density = B.fogD; scene.background.setHex(B.fog);
+  scene.fog.color.setHex(B.fog); scene.fog.density = B.fogD * 0.85; scene.background.setHex(B.fog);
   hemi.color.setHex(B.hemi[0]); hemi.groundColor.setHex(B.hemi[1]); hemi.intensity = 1.7; moon.intensity = 1.2; moon.color.set(B.glow).lerp(new THREE.Color(0xffffff), 0.6);
   const surf = biomeSurface(bk), glow = new THREE.Color(B.glow), acc = new THREE.Color(B.accent);
   const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(1, 1, 1), p = new THREE.Vector3(), col = new THREE.Color(), up = new THREE.Vector3(0, 1, 0);
@@ -368,7 +368,7 @@ function buildWorld(secIndex, seed = (Math.random() * 1e9) | 0) {
 
   // crystal pylons (light sources) tinted per biome
   world.pylons = [];
-  const crystal = MAT.crystal; crystal.color.copy(glow); crystal.emissive.copy(glow); crystal.emissiveIntensity = Math.max(0.55, 2.5 - glow.getHSL({}).l * 2.6);
+  const crystal = MAT.crystal; crystal.color.copy(glow); crystal.emissive.copy(glow); crystal.emissiveIntensity = Math.max(0.3, 2.2 - glow.getHSL({}).l * 2.6);
   const pg = new THREE.CylinderGeometry(0.28, 0.42, 1.4, 8), cg = new THREE.OctahedronGeometry(0.42, 0);
   const halo = new THREE.SpriteMaterial({ map: TEX.glow, color: glow, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.38 });
   for (const r of d.rooms) {

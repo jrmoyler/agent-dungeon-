@@ -1,10 +1,10 @@
 /* Agent Dungeon service worker.
    Shell + shared atlases are precached; per-agent atlases, Three.js modules and fonts are cached on first use,
    so any agent you've played once works offline. Bump VERSION whenever atlases or index.html change. */
-const VERSION = 'ad-v2-1';
+const VERSION = 'ad-v2-2';
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'atlas/manifest.json', 'atlas/batch.json',
-  'atlas/thumbs.webp', 'atlas/bosses.webp', 'atlas/enemies.webp',
+  'atlas/thumbs.webp',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png',
   ...['antigravity', 'claude', 'cursor', 'devin', 'dots', 'gemini', 'glm', 'grok', 'hermes', 'kimi', 'manus', 'meta', 'minimax', 'openclaw'].map(id => `atlas/${id}.webp`),
 ];
