@@ -5,7 +5,7 @@
 const G = {
   mode: 'title', hero: null, p: null, floor: 1, time: 0, enemies: [], corpses: [], runSeed: 0, sector: null, summons: [], fx: [], pickups: [], shards: [], lines: [], delayed: [], telegraphs: [], hazards: [],
   kills: 0, score: 0, dmgDealt: 0, runTime: 0, hitstop: 0, shake: 0, flow: null, flowTile: -1, portalOpen: false, paused: false, bosses: [], rival: null,
-  stage: 'wings', secretsFound: 0, settings: { shake: true, autofire: false },
+  stage: 'wings', secretsFound: 0, settings: { shake: true, autofire: false }, smears: [], kick: { x: 0, z: 0 }, combo: 0, comboT: 0, bestCombo: 0,
 };
 const input = { up: 0, down: 0, left: 0, right: 0, fire: false, aimX: 1, aimZ: 0, mouseX: 0, mouseY: 0, mouseIn: false, dash: false, stickMove: [0, 0], stickAim: [0, 0], stickAimOn: false, autoFire: false, moves: {}, interact: false };
 const tmpV = new THREE.Vector3(), tmpV2 = new THREE.Vector3(), tmpV3 = new THREE.Vector3();
@@ -38,15 +38,14 @@ for (let i = 0; i < 56; i++) { const d = document.createElement('div'); d.classN
 let dmgIdx = 0;
 function floatText(x, z, text, cls = '', y = 2.2) {
   const d = dmgPool[dmgIdx]; dmgIdx = (dmgIdx + 1) % dmgPool.length;
-  d.t = 0.85; d.x = x + rr(-0.3, 0.3); d.z = z; d.y = y; d.el.textContent = text; d.el.className = 'dn show ' + cls;
+  d.t = 0.85; d.x = x + rr(-0.3, 0.3); d.z = z; d.y = y; d.vx = rr(-1.4, 1.4); d.vy = 4.2; d.el.textContent = text; d.el.className = 'dn show ' + cls;
 }
 function updateFloatText(dt) {
-  const w = window.innerWidth, h = window.innerHeight;
   for (const d of dmgPool) {
-    if (d.t <= 0) continue; d.t -= dt; d.y += dt * 1.6;
+    if (d.t <= 0) continue; d.t -= dt; d.vy -= dt * 9; d.y += d.vy * dt; d.x += d.vx * dt;
     tmpV.set(d.x, d.y, d.z).project(camera);
-    const sx = (tmpV.x * 0.5 + 0.5) * w, sy = (-tmpV.y * 0.5 + 0.5) * h;
-    d.el.style.transform = `translate(${sx}px,${sy}px) translate(-50%,-50%) scale(${0.8 + Math.min(1, (0.85 - d.t) * 8) * 0.4})`;
+    const [sx, sy] = ndcToCss(tmpV.x, tmpV.y), age = 0.85 - d.t;
+    d.el.style.transform = `translate(${sx | 0}px,${sy | 0}px) translate(-50%,-50%) scale(${age < 0.08 ? 1.6 - age * 6 : 1})`;
     d.el.style.opacity = Math.min(1, d.t * 3);
     if (d.t <= 0) d.el.className = 'dn';
   }
@@ -125,16 +124,47 @@ function heroKit(h) {
   kit.summon.desc = 'Deploys a hovering helper that fires homing rounds';
   return kit;
 }
+/* afterimages for dashes: additive copies frozen on the frame they were dropped */
+function makeGhosts(id, color, n = 6) {
+  const L = BATCH.layout, rows = Math.ceil(148 / L.cols);
+  return Array.from({ length: n }, () => {
+    const tex = AGENT_TEX[id].body.clone(); tex.needsUpdate = true;
+    const mat = pixelSpriteMat(tex, { gain: 1 }); mat.blending = THREE.AdditiveBlending; mat.userData.u.uFlash.value = 0.6; mat.userData.u.uFlashCol.value.set(color);
+    const spr = new THREE.Sprite(mat); spr.center.set(L.anchor[0] / L.cell, 1 - L.anchor[1] / L.cell); spr.renderOrder = 4; spr.visible = false; scene.add(spr);
+    return { spr, mat, tex, rows, t: 0 };
+  });
+}
+function dropGhost(p) {
+  const g = p.ghosts[p.ghostI = ((p.ghostI || 0) + 1) % p.ghosts.length], L = BATCH.layout;
+  frameUV(g.tex, L.cols, g.rows, p.sprite.frame); g.t = 0.26; g.spr.visible = true;
+  g.spr.position.copy(p.sprite.spr.position); g.spr.scale.copy(p.sprite.spr.scale);
+}
+function updateGhosts(p, dt) { for (const g of p.ghosts) { if (g.t <= 0) continue; g.t -= dt; g.mat.opacity = Math.max(0, g.t / 0.26) * 0.7; if (g.t <= 0) g.spr.visible = false; } }
+/* aim reticle on the floor + a chevron at the agent's feet */
+function makeAimMarks(color) {
+  const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.85, depthWrite: false, depthTest: false, blending: THREE.AdditiveBlending });
+  const ret = new THREE.Group();
+  const ringM = new THREE.Mesh(new THREE.RingGeometry(0.42, 0.56, 20).rotateX(-Math.PI / 2), mat); ret.add(ringM);
+  for (let i = 0; i < 4; i++) { const t = new THREE.Mesh(new THREE.PlaneGeometry(0.1, 0.32).rotateX(-Math.PI / 2), mat); const a = i * Math.PI / 2; t.position.set(Math.cos(a) * 0.72, 0, Math.sin(a) * 0.72); t.rotation.y = -a; ret.add(t); }
+  const sh = new THREE.Shape(); sh.moveTo(0.34, 0); sh.lineTo(-0.1, 0.22); sh.lineTo(0.0, 0); sh.lineTo(-0.1, -0.22); sh.closePath();
+  const chev = new THREE.Mesh(new THREE.ShapeGeometry(sh).rotateX(-Math.PI / 2), mat);
+  ret.renderOrder = chev.renderOrder = 9; ret.children.forEach(c => c.renderOrder = 9);
+  scene.add(ret, chev); return { ret, chev, mat };
+}
 function createPlayer(h) {
   const st = derive(h);
   const a = makeAgentSprite(h.id);
-  const light = new THREE.PointLight(h.color, 30, 18, 1.2); scene.add(light);
+  // x-ray silhouette: drawn only where a wall or rig hides the agent
+  const silMat = pixelSpriteMat(a.tex, { gain: 1 }); silMat.depthFunc = THREE.GreaterDepth; silMat.opacity = 0.5; silMat.userData.u.uFlash.value = 1; silMat.userData.u.uFlashCol.value.set(h.color);
+  const sil = new THREE.Sprite(silMat); sil.center.copy(a.spr.center); sil.renderOrder = 9; scene.add(sil);
+  const light = new THREE.PointLight(h.color, 14, 16, 1.1); scene.add(light);
   const p = {
     x: 0, z: 0, vx: 0, vz: 0, r: 0.5, hero: h, st, hp: st.maxHp, maxHp: st.maxHp, kit: heroKit(h),
     mods: { dmg: 1, rate: 1, count: 0, pierce: 0, spd: 1, cd: 1, crit: 0, regen: 0, range: 1, magnet: 1, pspeed: 1, status: 0, burst: 0, armor: 1 },
     cds: {}, cdMax: {}, fireT: 0, dashT: 0, dashCd: 0, inv: 0, level: 1, xp: 0, xpNext: 12, buffs: { power: 0, haste: 0, citation: 0, homing: 0 },
     shots: 0, slowT: 0, glm: 'zh', rooted: 0, castT: 0, castFn: null, sprite: a, light, shadow: makeShadow(0.6),
     dir: 2, animT: 0, walkT: 0, moving: false, atk: null, react: null, aimX: 1, aimZ: 0, picks: {}, hurtFlash: 0, dead: false, st8: {},
+    sil, silMat, ghosts: makeGhosts(h.id, h.color), ghostT: 0, aim: makeAimMarks(h.color), sq: 0, sqV: 0, stepT: 0,
   };
   for (const k of MOVE_KEYS) { p.cds[k] = 0; p.cdMax[k] = 1; }
   return p;
@@ -168,9 +198,9 @@ function getFxSprite(heroId) {
   let f = FX_POOL.find(q => !q.alive && q.hid === heroId);
   if (!f) {
     const tex = AGENT_TEX[heroId].fx.clone(); tex.needsUpdate = true;
-    const mat = pixelSpriteMat(tex, { gain: 1.25 }); mat.depthTest = false;
+    const mat = pixelSpriteMat(tex, { gain: 1.25, tilt: false }); mat.depthTest = false;
     const s = new THREE.Sprite(mat); s.renderOrder = 8; scene.add(s); s.visible = false;
-    const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: TEX.glow, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.5 })); glow.renderOrder = 7; scene.add(glow); glow.visible = false;
+    const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: TEX.glow, depthTest: false, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.5 })); glow.renderOrder = 7; scene.add(glow); glow.visible = false;
     f = { hid: heroId, s, mat, tex, glow, alive: false, frame: -1 }; FX_POOL.push(f);
   }
   return f;
@@ -193,7 +223,7 @@ function tickAtlasFx(f, dt) {
   if (f.stretch) f.s.scale.set(f.stretch[0], f.stretch[1], 1); else f.s.scale.set(sc, sc, 1);
   f.s.position.set(f.x, f.y, f.z);
   f.mat.opacity = Math.min(1, (1 - k) * 4);
-  if (f.glow.visible) { f.glow.position.set(f.x, f.y, f.z); f.glow.scale.setScalar(sc * 1.4); f.glow.material.opacity = 0.45 * (1 - k); }
+  if (f.glow.visible) { f.glow.position.set(f.x, f.y, f.z); f.glow.scale.setScalar(Math.min(7, sc * 1.3)); f.glow.material.opacity = 0.3 * (1 - k); }
   if (k >= 1) { f.alive = false; f.s.visible = false; f.glow.visible = false; f.dead = true; }
 }
 /* legacy sprite FX (card art) */
@@ -215,13 +245,23 @@ function tickLegacyFx(f, dt) {
 }
 function updateFxAll(dt) { for (const f of G.fx) f.legacy ? tickLegacyFx(f, dt) : tickAtlasFx(f, dt); G.fx = G.fx.filter(f => !f.dead); }
 /* additive shock ring on the floor */
+/* shockwave: a hard bright front with a thin dithered wake, on the floor */
 const ringPool = [];
+const ringGeo = new THREE.PlaneGeometry(2, 2).rotateX(-Math.PI / 2);
 function shockRing(x, z, r, color, dur = 0.45, y = 0.08) {
   let g = ringPool.find(o => !o.alive);
-  if (!g) { const m = new THREE.Mesh(new THREE.RingGeometry(0.86, 1, 64).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })); m.renderOrder = 3; scene.add(m); g = { m }; ringPool.push(g); }
-  Object.assign(g, { alive: true, x, z, r, t: 0, dur, y }); g.m.visible = true; g.m.material.color.set(color);
+  if (!g) {
+    const mat = new THREE.ShaderMaterial({ uniforms: { c: { value: new THREE.Color() }, k: { value: 0 } }, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+      vertexShader: 'varying vec2 vP; void main(){ vP=position.xz; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
+      fragmentShader: `varying vec2 vP; uniform vec3 c; uniform float k;
+        void main(){ float r=length(vP); if(r>1.0) discard; float R=1.0-pow(1.0-k,3.0);
+          float front=step(abs(r-R),0.06+0.04*(1.0-k)); float wake=step(r,R)*smoothstep(R-0.45,R,r)*0.35;
+          float a=(front*1.6+wake)*(1.0-k); if(a<0.02) discard; gl_FragColor=vec4(mix(c,vec3(1.0),front*0.35*(1.0-k))*a,1.0); }` });
+    const m = new THREE.Mesh(ringGeo, mat); m.renderOrder = 3; scene.add(m); g = { m }; ringPool.push(g);
+  }
+  Object.assign(g, { alive: true, x, z, r, t: 0, dur, y }); g.m.visible = true; g.m.material.uniforms.c.value.set(color);
 }
-function updateRings(dt) { for (const g of ringPool) { if (!g.alive) continue; g.t += dt; const k = g.t / g.dur; g.m.position.set(g.x, g.y, g.z); g.m.scale.setScalar(g.r * (0.25 + 0.75 * (1 - (1 - k) ** 3))); g.m.material.opacity = (1 - k) * 0.9; if (k >= 1) { g.alive = false; g.m.visible = false; } } }
+function updateRings(dt) { for (const g of ringPool) { if (!g.alive) continue; g.t += dt; const k = Math.min(1, g.t / g.dur); g.m.position.set(g.x, g.y, g.z); g.m.scale.setScalar(g.r); g.m.material.uniforms.k.value = k; if (k >= 1) { g.alive = false; g.m.visible = false; } } }
 const lineMats = {};
 function zap(points, color, y = 1.2) {
   const geo = new THREE.BufferGeometry().setFromPoints(points.map(([x, z]) => new THREE.Vector3(x, y, z)));
@@ -230,14 +270,64 @@ function zap(points, color, y = 1.2) {
   for (let i = 0; i < points.length - 1; i++) { const [ax, az] = points[i], [bx, bz] = points[i + 1]; for (let k = 0; k < 6; k++) { const t = k / 6; particles.emit(lerp(ax, bx, t), y, lerp(az, bz, t), color, 1, { speed: 1, life: 0.35, size: 0.35, grav: 0, lift: 0 }); } }
 }
 function jagged(ax, az, bx, bz, n = 6, amp = 0.5) { const pts = [[ax, az]]; const px = -(bz - az), pz = bx - ax, l = Math.hypot(px, pz) || 1; for (let i = 1; i < n; i++) { const t = i / n, o = rr(-amp, amp); pts.push([lerp(ax, bx, t) + px / l * o, lerp(az, bz, t) + pz / l * o]); } pts.push([bx, bz]); return pts; }
+/* ---------- combat feel: flash lights, debris, slash smears, beam ribbons ---------- */
+const FLASH = [];
+function initFlashLights() { for (let i = 0; i < 5; i++) { const l = new THREE.PointLight(0xffffff, 0, 10, 1.4); l.userData = { t: 0, dur: 1, i0: 0 }; scene.add(l); FLASH.push(l); } }
+function flashLight(x, y, z, color, intensity = 40, dur = 0.15, range = 10) {
+  const l = FLASH.reduce((a, b) => (a.userData.t <= b.userData.t ? a : b));
+  l.color.set(color); l.position.set(x, y, z); l.distance = range; Object.assign(l.userData, { t: dur, dur, i0: intensity }); l.intensity = intensity;
+}
+function updateFlashLights(dt) { for (const l of FLASH) { const u = l.userData; if (u.t <= 0) { l.intensity = 0; continue; } u.t -= dt; const k = Math.max(0, u.t / u.dur); l.intensity = u.i0 * k * k; } }
+/* chunky bits that bounce and settle on the floor */
+function debrisBurst(x, z, colors, n, power = 1) {
+  for (let i = 0; i < n; i++) particles.emit(x, 0.7, z, colors[i % colors.length], 1, { speed: 6 * power, life: 0.9 + rand() * 0.5, size: 0.28 + rand() * 0.18, grav: 16, up: 2.4, drag: 1.6, lift: 3 });
+}
+const slashGeo = {};
+function slashMat() {
+  return new THREE.ShaderMaterial({ uniforms: { c: { value: new THREE.Color() }, prog: { value: 0 }, fade: { value: 1 }, hw: { value: 1 } }, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+    vertexShader: 'varying vec2 vP; void main(){ vP=position.xz; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
+    fragmentShader: `varying vec2 vP; uniform vec3 c; uniform float prog; uniform float fade; uniform float hw;
+      void main(){ float r=length(vP), t=(atan(vP.y,vP.x)+hw)/(2.0*hw); float lead=prog-t;
+        if(lead<0.0||lead>0.7) discard; float body=1.0-lead/0.7; float edge=smoothstep(0.35,1.0,r);
+        float a=body*edge*fade; if(a<0.08) discard; vec3 col=mix(c,vec3(1.0),step(lead,0.08)*0.8+step(0.93,r)*0.5);
+        gl_FragColor=vec4(col*a*1.6,1.0); }` });
+}
+/* smear arc for melee sweeps: sweeps across the swing, then fades */
+function slashArc(x, z, a0, half, R, color, dur = 0.2, y = 0.95) {
+  const key = half.toFixed(2); slashGeo[key] ||= new THREE.RingGeometry(0.25, 1, 28, 1, -half, half * 2).rotateX(-Math.PI / 2);
+  const m = new THREE.Mesh(slashGeo[key], slashMat()); m.material.uniforms.c.value.set(color); m.material.uniforms.hw.value = half;
+  m.position.set(x, y, z); m.rotation.y = -a0; m.scale.setScalar(R); m.renderOrder = 8; scene.add(m);
+  G.smears.push({ m, t: 0, dur });
+}
+const beamGeo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2).translate(0.5, 0, 0);
+function beamRibbon(x, z, ang, len, width, color, dur = 0.3, y = 1.1) {
+  const mat = new THREE.ShaderMaterial({ uniforms: { c: { value: new THREE.Color(color) }, t: { value: 0 }, fade: { value: 1 }, len: { value: len } }, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+    vertexShader: 'varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
+    fragmentShader: `varying vec2 vUv; uniform vec3 c; uniform float t; uniform float fade; uniform float len;
+      void main(){ float d=abs(vUv.y-0.5)*2.0; float w=fade; if(d>w) discard;
+        float core=step(d,w*0.32), band=step(fract(vUv.x*len*0.9-t*14.0),0.5)*0.35;
+        float tip=smoothstep(0.0,0.04,vUv.x)*smoothstep(1.0,0.97,vUv.x);
+        vec3 col=mix(c*(1.1+band),vec3(1.0),core*0.85); gl_FragColor=vec4(col*tip*(0.6+fade*0.8),1.0); }` });
+  const m = new THREE.Mesh(beamGeo, mat); m.position.set(x, y, z); m.rotation.y = -ang; m.scale.set(len, 1, width); m.renderOrder = 8; scene.add(m);
+  G.smears.push({ m, t: 0, dur, beam: true });
+}
+function updateSmears(dt) {
+  for (const s of G.smears) {
+    s.t += dt; const k = Math.min(1, s.t / s.dur), u = s.m.material.uniforms;
+    if (s.beam) { u.t.value = s.t; u.fade.value = (1 - k) * (0.85 + Math.sin(s.t * 70) * 0.15); }
+    else { u.prog.value = Math.min(1.7, k * 2.4); u.fade.value = 1 - Math.max(0, k - 0.45) / 0.55; }
+    if (k >= 1) { scene.remove(s.m); s.m.material.dispose(); s.done = true; }
+  }
+  G.smears = G.smears.filter(s => !s.done);
+}
 function updateLines(dt) { for (const L of G.lines) { L.t -= dt; L.l.material.opacity = Math.max(0, L.t / 0.3); if (L.t <= 0) { scene.remove(L.l); L.l.geometry.dispose(); L.l.material.dispose(); } } G.lines = G.lines.filter(L => L.t > 0); }
 
 /* ---------- player projectiles ---------- */
 const PPOOL = [];
 function getPProj() {
   for (const q of PPOOL) if (!q.alive) return q;
-  const mat = pixelSpriteMat(null, { gain: 1.15 }); mat.depthTest = true; const s = new THREE.Sprite(mat); s.renderOrder = 6; scene.add(s); s.visible = false;
-  const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: TEX.glow, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.55 })); glow.renderOrder = 5; scene.add(glow); glow.visible = false;
+  const mat = pixelSpriteMat(null, { gain: 1.15, tilt: false }); mat.depthTest = true; const s = new THREE.Sprite(mat); s.renderOrder = 6; scene.add(s); s.visible = false;
+  const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: TEX.glow, depthTest: false, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.55 })); glow.renderOrder = 5; scene.add(glow); glow.visible = false;
   const q = { alive: false, s, mat, glow, ownTex: {} }; PPOOL.push(q); return q;
 }
 /* opt.mode 'legacy' uses card projectile art; 'atlas' uses the agent FX atlas row */
@@ -287,7 +377,11 @@ function updatePlayerProj(dt) {
     const nx = q.x + q.vx * dt, nz = q.z + q.vz * dt;
     if (solidAt(nx, nz)) {
       if (q.bounce > 0) { q.bounce--; if (solidAt(nx, q.z)) q.vx = -q.vx; if (solidAt(q.x, nz)) q.vz = -q.vz; particles.emit(q.x, q.y, q.z, q.color, 5, { speed: 3, life: 0.25, size: 0.2 }); }
-      else { q.life = 0; spawnAtlasFx(q.hid, q.move, 'impact', q.x, q.z, { size: 1.6, dur: 0.24 }); particles.emit(q.x, q.y, q.z, q.color, 6, { speed: 4, life: 0.3, size: 0.22 }); }
+      else {
+        q.life = 0; spawnAtlasFx(q.hid, q.move, 'impact', q.x, q.z, { size: 1.6, dur: 0.24 });
+        particles.emit(q.x, q.y, q.z, q.color, 6, { speed: 4, life: 0.3, size: 0.22, dir: [-q.vx * 0.15, -q.vz * 0.15] });
+        const pr = propAtPoint(nx, nz); if (pr) damageProp(pr, heroDamage(G.p, q.dmgMul)[0], q.vx, q.vz);
+      }
     } else { q.x = nx; q.z = nz; }
     if (q.life > 0) for (const e of G.enemies) {
       if (!e.alive || e.hidden || q.hit.has(e)) continue;
@@ -296,6 +390,7 @@ function updatePlayerProj(dt) {
       const [d, crit] = heroDamage(G.p, q.dmgMul, e);
       damageEnemy(e, d, crit, q.vx, q.vz, { knock: q.knock });
       spawnAtlasFx(q.hid, q.move, 'impact', q.x, q.z, { size: crit ? 2.4 : 1.8, dur: 0.26 });
+      if (crit) flashLight(q.x, 1.1, q.z, q.color, 18, 0.1, 6);
       onHitStatus(e, q.status, q.statusChance, q.x, q.z, d);
       if (q.splitLeft > 0 || (q.status === 'split' && q.move === 'primary_shot' && !q.child)) {
         const a = Math.atan2(q.vz, q.vx);
@@ -314,7 +409,7 @@ function updatePlayerProj(dt) {
     else if (q.rot === 'wobble') q.mat.rotation = Math.sin(q.t * 14) * 0.25;
     else if (q.rot === 'flip') { const g = 1 + (1 - q.life / q.max) * 0.5; q.s.scale.set((q.vx < 0 ? -1 : 1) * q.sw * g, q.sh * g, 1); }
     q.trailT -= dt;
-    if (q.trailT <= 0) { q.trailT = 0.045; particles.emit(q.x, q.y, q.z, q.color, 1, { speed: 0.6, life: 0.28, size: 0.22, grav: 0, lift: 0 }); }
+    if (q.trailT <= 0) { q.trailT = 0.025; particles.emit(q.x, q.y, q.z, q.trailAlt = !q.trailAlt ? 0xffffff : q.color, 1, { speed: 0.3, life: 0.2, size: 0.16, grav: 0, lift: 0 }); }
   }
 }
 
@@ -365,7 +460,11 @@ function muzzleWorld(p, set = 'shot') {
   tmpV3.copy(right).multiplyScalar((m[0] - L.anchor[0]) * k).addScaledVector(upv, (L.anchor[1] - m[1]) * k);
   return [p.x + tmpV3.x, 0.2 + tmpV3.y, p.z + tmpV3.z];
 }
-function muzzleFlash(p, move) { const [mx, my, mz] = muzzleWorld(p); spawnAtlasFx(p.hero.id, move, 'muzzle', mx, mz, { y: my, size: 1.2, dur: 0.12 }); }
+function muzzleFlash(p, move) {
+  const [mx, my, mz] = muzzleWorld(p); spawnAtlasFx(p.hero.id, move, 'muzzle', mx, mz, { y: my, size: 1.2, dur: 0.12 });
+  flashLight(mx, my + 0.3, mz, p.hero.color, 14, 0.07, 7);
+  particles.emit(mx, my, mz, 0xffffff, 2, { speed: 2, life: 0.12, size: 0.14, grav: 0, lift: 0, dir: [p.aimX * 9, p.aimZ * 9] });
+}
 function playerShoot(p) {
   const h = p.hero, a0 = Math.atan2(p.aimZ, p.aimX);
   if (h.cohort === 'echo') {
@@ -388,6 +487,7 @@ function playerShoot(p) {
   AUDIO.sfx.shoot(1 + (h.stats.spd - 4) * 0.06);
   muzzleFlash(p, 'primary_shot');
   setAttack(p, 'shot', 0.2);
+  p.vx -= p.aimX * 0.35; p.vz -= p.aimZ * 0.35; p.sq = Math.max(p.sq, 0.05); shakeAdd(0, -p.aimX * 0.035, -p.aimZ * 0.035);
 }
 function moveReady(p, k) { return p.cds[k] <= 0 && p.rooted <= 0 && !p.dead && !(p.st8.silence > 0); }
 function startCd(p, k, base) { p.cdMax[k] = base * cdMul(p); p.cds[k] = p.cdMax[k]; }
@@ -406,7 +506,10 @@ function useMove(p, k) {
       const R = MOVE_BASE[k].range * Math.sqrt(rng), half = MOVE_BASE[k].arc / 2;
       after(0.09, () => {
         const ax = Math.cos(a0), az = Math.sin(a0);
-        spawnAtlasFx(h.id, 'sweeping_arc', 'projectile', p.x + ax * R * 0.55, p.z + az * R * 0.55, { size: R * 1.25, dur: 0.24, rot: screenAngleFix(p.x, p.z, ax, az), glow: h.color });
+        spawnAtlasFx(h.id, 'sweeping_arc', 'projectile', p.x + ax * R * 0.55, p.z + az * R * 0.55, { size: R * 1.1, dur: 0.22, rot: screenAngleFix(p.x, p.z, ax, az) });
+        slashArc(p.x, p.z, a0, half, R * 1.05, h.color, 0.2); flashLight(p.x + ax * R * 0.6, 1.1, p.z + az * R * 0.6, h.color, 30, 0.14);
+        p.vx += ax * 5; p.vz += az * 5; p.sq = -0.1; shakeAdd(0, ax * 0.12, az * 0.12);
+        for (const pr of propsNear(p.x, p.z, R)) { let da = Math.atan2(pr.z - p.z, pr.x - p.x) - a0; while (da > Math.PI) da -= 2 * Math.PI; while (da < -Math.PI) da += 2 * Math.PI; if (Math.abs(da) < half + 0.3) damageProp(pr, heroDamage(p, MOVE_BASE[k].dmg)[0]); }
         for (let i = 0; i < 14; i++) { const a = a0 - half + (i / 13) * half * 2; particles.emit(p.x + Math.cos(a) * R * 0.85, 1.0, p.z + Math.sin(a) * R * 0.85, h.color, 2, { speed: 2, life: 0.3, size: 0.3, grav: 0, dir: [Math.cos(a + 1.57) * 3, Math.sin(a + 1.57) * 3] }); }
         let healed = 0;
         for (const e of G.enemies) {
@@ -428,8 +531,12 @@ function useMove(p, k) {
         const a = Math.atan2(p.aimZ, p.aimX), dx = Math.cos(a), dz = Math.sin(a), [mx, my, mz] = muzzleWorld(p);
         const len = rayLength(p.x, p.z, dx, dz, MOVE_BASE[k].range * rng);
         // stretched beam built from the move's FX strip
-        const steps = Math.max(1, Math.round(len / 1.6));
-        for (let i = 0; i < steps; i++) { const t = (i + 0.5) / steps; spawnAtlasFx(h.id, 'piercing_beam', 'projectile', p.x + dx * len * t, p.z + dz * len * t, { size: len / steps * 1.15, dur: 0.32, rot: screenAngleFix(p.x, p.z, dx, dz), loop: true, glow: i % 2 ? h.color : null, y: 1.1 }); }
+        const steps = Math.max(1, Math.round(len / 2.4));
+        for (let i = 0; i < steps; i++) { const t = (i + 0.5) / steps; spawnAtlasFx(h.id, 'piercing_beam', 'projectile', p.x + dx * len * t, p.z + dz * len * t, { size: len / steps * 1.1, dur: 0.3, rot: screenAngleFix(p.x, p.z, dx, dz), loop: true, y: 1.1 }); }
+        beamRibbon(p.x + dx * 0.5, p.z + dz * 0.5, a, len - 0.5, 0.9, h.color, 0.34);
+        flashLight(p.x + dx * len * 0.5, 1.2, p.z + dz * len * 0.5, h.color, 50, 0.3, Math.max(10, len * 0.7));
+        p.vx -= dx * 6; p.vz -= dz * 6; shakeAdd(0.3, -dx * 0.22, -dz * 0.22);
+        const endPr = propAtPoint(p.x + dx * (len + 0.3), p.z + dz * (len + 0.3)); if (endPr) damageProp(endPr, heroDamage(p, MOVE_BASE[k].dmg * pow)[0]);
         spawnAtlasFx(h.id, 'piercing_beam', 'muzzle', mx, mz, { y: my, size: 2.2, dur: 0.2 });
         spawnAtlasFx(h.id, 'piercing_beam', 'impact', p.x + dx * len, p.z + dz * len, { size: 2.6, dur: 0.3 });
         for (const e of G.enemies) {
@@ -450,6 +557,8 @@ function useMove(p, k) {
         particles.emit(p.x, 0.5, p.z, h.color, 40, { speed: R * 3, life: 0.45, size: 0.35, up: 0.2 });
         for (const e of G.enemies) { if (!e.alive || e.hidden) continue; const dx = e.x - p.x, dz = e.z - p.z, d = Math.hypot(dx, dz); if (d < R + e.r) { const [dd, crit] = heroDamage(p, MOVE_BASE[k].dmg * pow, e); damageEnemy(e, dd, crit, dx, dz, { knock: 10 }); onHitStatus(e, h.hitStatus, 1, e.x, e.z, dd); } }
         clearEnemyBullets(p.x, p.z, R);
+        flashLight(p.x, 1.4, p.z, h.color, 70, 0.3, R * 2.2); p.sq = 0.18;
+        for (const pr of propsNear(p.x, p.z, R)) damageProp(pr, heroDamage(p, MOVE_BASE[k].dmg * pow)[0]);
         if (h.wardHeal) healPlayer(p, p.maxHp * h.wardHeal);
         shakeAdd(0.4); G.hitstop = Math.max(G.hitstop, 0.05);
       });
@@ -475,6 +584,8 @@ function useMove(p, k) {
             onEnd: (x, z) => {
               const R = 4.8; spawnAtlasFx(h.id, 'ultimate', 'impact', x, z, { size: R * 2.2, dur: 0.5, glow: h.color }); shockRing(x, z, R, h.color, 0.5); shockRing(x, z, R * 0.55, 0xffffff, 0.35);
               particles.emit(x, 1, z, h.color, 70, { speed: 11, life: 0.7, size: 0.4 }); AUDIO.sfx.boom(); shakeAdd(0.8); G.hitstop = Math.max(G.hitstop, 0.08);
+              flashLight(x, 1.5, z, h.color, 110, 0.45, 14); debrisBurst(x, z, [h.color, 0xffffff], 14, 1.2);
+              for (const pr of propsNear(x, z, R)) damageProp(pr, 999);
               for (const e of G.enemies) if (e.alive && !e.hidden && Math.hypot(e.x - x, e.z - z) < R + e.r) { const [dd, crit] = heroDamage(p, MOVE_BASE[k].dmg * pow, e); damageEnemy(e, dd, crit, e.x - x, e.z - z, { knock: 9 }); applyStatus(e, h.hitStatus === 'pierce' ? 'mark' : h.hitStatus, 4); }
             } });
         });
@@ -485,7 +596,8 @@ function useMove(p, k) {
   return true;
 }
 function healPlayer(p, amt) { if (amt <= 0) return; p.hp = Math.min(p.maxHp, p.hp + amt); }
-function shakeAdd(v) { if (G.settings.shake) G.shake = Math.max(G.shake, v); }
+/* trauma-style shake plus a directional kick (recoil, impacts) that springs back */
+function shakeAdd(v, kx = 0, kz = 0) { if (!G.settings.shake) return; G.shake = Math.max(G.shake, v); G.kick.x += kx; G.kick.z += kz; }
 
 /* ---------- origin ultimates (each agent's card special) ---------- */
 function useLegacySpecial(p) {
@@ -604,7 +716,7 @@ function updateSpecialAreas(dt) {
 function spawnSummon(kind, x, z, o = {}) {
   const h = G.p.hero, art = ART[o.art || h.id] || ART.devin;
   const tex = o.tex || art.summon.tex;
-  const m = spriteMat(tex, { color: o.tint ?? 0xffffff, opacity: o.opacity ?? 1 }); const s = new THREE.Sprite(m); s.center.set(0.5, 0.08); s.renderOrder = 5; scene.add(s);
+  const m = tiltSprite(spriteMat(tex, { color: o.tint ?? 0xffffff, opacity: o.opacity ?? 1 })); const s = new THREE.Sprite(m); s.center.set(0.5, 0.08); s.renderOrder = 5; scene.add(s);
   const H = o.height ?? 1.5; const imgW = tex.image.width, imgH = tex.image.height;
   const sm = { kind, x, z, s, m, life: o.life ?? 10, t: rand() * 5, fireT: rr(0.2, 0.6), h: H, w: H * imgW / imgH, y: o.y ?? 0, alive: true, hp: o.hp ?? 999, angle: o.angle ?? 0, shadow: o.noShadow ? null : makeShadow(0.4), tick: 0, r: 0.4 };
   G.summons.push(sm); return sm;
@@ -614,7 +726,7 @@ function spawnTurret(x, z, life, mine, small = false) {
   const p = G.p, h = p.hero;
   const tex = AGENT_TEX[h.id].fx.clone(); tex.needsUpdate = true; frameUV(tex, 16, 7, FX_ROW.summon * 16);
   const m = pixelSpriteMat(tex, { gain: 1.2 }); const s = new THREE.Sprite(m); s.renderOrder = 6; scene.add(s);
-  const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: TEX.glow, color: h.color, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.5 })); glow.scale.setScalar(2.4); scene.add(glow);
+  const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: TEX.glow, depthTest: false, color: h.color, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.5 })); glow.scale.setScalar(2.4); scene.add(glow);
   const ring = new THREE.Mesh(new THREE.RingGeometry(0.7, 0.85, 32).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: h.color, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending, depthWrite: false })); scene.add(ring);
   const sm = { kind: 'turret', mine, x, z, s, m, tex, glow, ring, life, max: life, t: rand() * 5, fireT: 0.3, alive: true, hp: 999, y: 1.4, r: 0.4, frame: 0, small, size: small ? 1.6 : 2.4 };
   G.summons.push(sm); return sm;

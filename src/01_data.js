@@ -1,8 +1,6 @@
 import * as THREE from 'three';
-import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
-import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 
 /* ------------------------------------------------------------------
@@ -239,10 +237,10 @@ const HEROES = [
 const HERO_BY_ID = Object.fromEntries(HEROES.map(h => [h.id, h]));
 
 const ITEM_KINDS = [
-  { key:'heal',  label:'Patch applied',   sub:'+30% health',          color:0x3ff0a8 },
-  { key:'power', label:'Overclock',       sub:'2× damage, 8s',        color:0xff5a5a },
-  { key:'haste', label:'Burst capacity',  sub:'+50% fire rate, 8s',   color:0xffd166 },
-  { key:'charge',label:'Context refill',  sub:'All skills ready',     color:0x7cc4ff },
+  { key:'heal',  label:'Patch applied',   sub:'+30% health',          color:0x3ff0a8, icon:'ic_heal' },
+  { key:'power', label:'Overclock',       sub:'2× damage, 8s',        color:0xff5a5a, icon:'ic_flame' },
+  { key:'haste', label:'Burst capacity',  sub:'+50% fire rate, 8s',   color:0xffd166, icon:'ic_round' },
+  { key:'charge',label:'Context refill',  sub:'All skills ready',     color:0x7cc4ff, icon:'ic_orb' },
 ];
 
 const UPGRADES = [

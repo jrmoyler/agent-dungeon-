@@ -9,7 +9,7 @@ const WALL_H = 2.2;
 const T_FLOOR = 0, T_WALL = 1, T_GATE = 2, T_SEAL = 3;
 const world = {
   W: 0, H: 0, grid: null, rooms: [], group: null, start: null, vault: null, pylons: [], lights: [], explored: null, portal: null,
-  biome: 'core_facility', sector: null, gateCells: [], sealCells: [], switches: [], traps: [], secret: null, anim: [], gateOpen: false, sealOpen: false,
+  biome: 'core_facility', sector: null, gateCells: [], sealCells: [], switches: [], traps: [], secret: null, anim: [], gateOpen: false, sealOpen: false, props: [], propAt: new Map(),
 };
 
 /* ---------- layout ---------- */
@@ -256,18 +256,88 @@ function buildMaterials() {
   MAT.crystal = new THREE.MeshStandardMaterial({ color: 0x66e0ff, emissive: 0x2fbfff, emissiveIntensity: 2.2, roughness: 0.15, metalness: 0.1, transparent: true, opacity: 0.92 });
 }
 function biomeSurface(bk) {
-  const B = BIOMES[bk], maps = biomeMaps(bk), glow = new THREE.Color(B.glow);
-  const floor = new THREE.MeshStandardMaterial({ ...maps.floor, color: 0xffffff, metalness: B.metal, roughness: 1, emissive: 0xffffff, emissiveIntensity: 0.55, normalScale: new THREE.Vector2(1.2, 1.2) });
-  const side = new THREE.MeshStandardMaterial({ ...maps.wall, color: 0xffffff, metalness: B.metal * 0.6, roughness: 1, emissive: 0xffffff, emissiveIntensity: 1.1 });
-  const top = new THREE.MeshStandardMaterial({ ...maps.wall, color: 0xd2d8e6, roughness: 1, metalness: B.metal * 0.4, emissive: 0xffffff, emissiveIntensity: 0.55, normalScale: new THREE.Vector2(0.8, 0.8) });
-  const seal = new THREE.MeshStandardMaterial({ ...maps.wall, color: 0xb0b0b0, roughness: 1, emissive: glow, emissiveIntensity: 0.4 });
-  return { floor, wall: [side, side, top, top, side, side], seal };
+  const B = BIOMES[bk], T = biomeMaps(bk), acc = new THREE.Color(B.accent);
+  const std = (maps, o = {}) => new THREE.MeshStandardMaterial({ ...maps, color: 0xffffff, roughness: o.r ?? 0.8, metalness: Math.min(0.45, B.metal), emissive: 0xffffff, emissiveIntensity: o.ei ?? 1.3 });
+  const tops = {};
+  return {
+    floors: T.floor.map(m => std(m, { r: 0.7, ei: 1 })),
+    side: std(T.side, { ei: 1 }),
+    top: mask => (tops[mask] ||= std(wallTopMaps(bk, mask), { ei: 1.05, r: 0.9 })),
+    seal: new THREE.MeshStandardMaterial({ map: T.side.map, color: 0xd8c08a, roughness: 0.6, metalness: 0.3, emissive: acc, emissiveIntensity: 0.35 }),
+  };
+}
+
+/* ---------- sheet props: standing billboards from the props sheet ---------- */
+const PROP_KIT = {
+  core_facility:   { wall: ['server', 'terminal', 'server'], crate: 'crate_tech', crates: 2, barrels: 1 },
+  shadow_realm:    { wall: ['crystal', 'crystal', 'terminal'], crate: 'crate_tech', crates: 2, barrels: 1 },
+  voltage_foundry: { wall: ['tesla', 'server', 'tesla'], crate: 'crate_tech', crates: 2, barrels: 1 },
+  inferno_depths:  { wall: ['terminal', 'server'], crate: 'crate_hot', crates: 2, barrels: 2 },
+  glacial_vault:   { wall: ['ice_pillar', 'ice_pillar', 'server'], crate: 'crate_tech', crates: 2, barrels: 1 },
+  toxic_hive:      { wall: ['terminal', 'crystal'], crate: 'crate_tech', crates: 1, barrels: 3 },
+  astral_rift:     { wall: ['crystal', 'server'], crate: 'crate_tech', crates: 2, barrels: 1 },
+  chrono_spire:    { wall: ['server', 'terminal', 'crystal'], crate: 'crate_hot', crates: 2, barrels: 1 },
+};
+const PROP_W = { crate_tech: 1.95, crate_hot: 1.95, server: 1.3, terminal: 1.5, tesla: 1.15, ice_pillar: 1.3, barrel: 1.45, crystal: 1.1, cache: 1.9 };
+function propSprite(name, x, z, o = {}) {
+  const T = PROPS[name], w = (o.w ?? PROP_W[name] ?? 1.5), h = w * T.h / T.w;
+  const m = pixelSpriteMat(T.tex, { gain: o.gain ?? 1 }); m.alphaTest = 0.5; m.depthWrite = true; m.transparent = false;
+  const s = new THREE.Sprite(m); s.center.set(0.5, o.cy ?? 0.04); s.scale.set(w, h, 1); s.position.set(x, 0, z); s.renderOrder = 2;
+  return s;
+}
+/* crates and barrels: solid cover that breaks; barrels blow up */
+function addBreakable(name, tx, ty) {
+  const x = (tx + 0.5) * TILE, z = (ty + 0.5) * TILE, explosive = name === 'barrel';
+  const s = propSprite(name, x, z); world.group.add(s);
+  const hp = (explosive ? 10 : 34) * (1 + (G.floor - 1) * 0.25);
+  const pr = { name, tx, ty, x, z, s, mat: s.material, hp, maxHp: hp, explosive, flash: 0, wob: 0, alive: true, fuse: -1 };
+  world.props.push(pr); world.propAt.set(ty * world.W + tx, pr); world.grid[ty * world.W + tx] = T_WALL;
+  return pr;
+}
+function propAtPoint(x, z) { return world.propAt.get(worldToTile(z) * world.W + worldToTile(x)); }
+function damageProp(pr, d, kx = 0, kz = 0) {
+  if (!pr || !pr.alive || pr.fuse >= 0) return;
+  pr.hp -= d; pr.flash = 0.08; pr.wob = 1; AUDIO.sfx.hit();
+  particles.emit(pr.x, 0.8, pr.z, pr.explosive ? 0x9bea52 : BIOMES[world.biome].glow, 4, { speed: 4, life: 0.3, size: 0.18 });
+  if (pr.hp <= 0) { if (pr.explosive) { pr.fuse = 0.42; AUDIO.sfx.warn(); } else breakProp(pr); }
+}
+function propsNear(x, z, R) { return world.props.filter(pr => pr.alive && Math.hypot(pr.x - x, pr.z - z) < R + 0.9); }
+function breakProp(pr) {
+  if (!pr.alive) return; pr.alive = false; world.group.remove(pr.s); pr.mat.dispose();
+  world.grid[pr.ty * world.W + pr.tx] = T_FLOOR; world.propAt.delete(pr.ty * world.W + pr.tx); G.flowDirty = true;
+  const B = BIOMES[world.biome], acc = pr.name === 'crate_hot' ? 0xff8a3a : B.glow;
+  debrisBurst(pr.x, pr.z, [0x1a2440, 0x2a3a66, acc], pr.explosive ? 16 : 12);
+  particles.emit(pr.x, 0.9, pr.z, acc, 18, { speed: 6, life: 0.45, size: 0.22, up: 1.4 });
+  AUDIO.sfx.kill(); shakeAdd(0.2);
+  if (pr.explosive) explodeBarrel(pr);
+  else { for (let i = 0; i < 3; i++) spawnShard(pr.x + rr(-0.5, 0.5), pr.z + rr(-0.5, 0.5), 1); if (rand() < 0.22) spawnPickup(pr.x, pr.z); }
+}
+function explodeBarrel(pr) {
+  const R = 3.6, x = pr.x, z = pr.z, toxic = world.biome !== 'inferno_depths', col = toxic ? 0x9bea52 : 0xff7a2a, st = toxic ? 'poison' : 'burn';
+  flashLight(x, 1.2, z, col, 90, 0.35); shockRing(x, z, R, col, 0.45); shockRing(x, z, R * 0.55, 0xffffff, 0.3);
+  particles.emit(x, 0.8, z, col, 70, { speed: 10, life: 0.7, size: 0.32, up: 1.2 });
+  particles.emit(x, 0.5, z, 0xffffff, 20, { speed: 6, life: 0.25, size: 0.25 });
+  AUDIO.sfx.boom(); shakeAdd(0.75, 0, 0); G.hitstop = Math.max(G.hitstop, 0.06);
+  const dmg = 45 * (1 + (G.floor - 1) * 0.3);
+  for (const e of G.enemies) if (e.alive && !e.hidden && Math.hypot(e.x - x, e.z - z) < R + e.r) { damageEnemy(e, e.boss ? dmg * 0.5 : dmg, true, e.x - x, e.z - z, { knock: 12 }); applyStatus(e, st, 3, { dps: dmg * 0.12 }); }
+  const p = G.p; if (Math.hypot(p.x - x, p.z - z) < R) { hurtPlayer(16 + G.floor * 2); applyPlayerStatus(st, 1.4); }
+  for (const o of propsNear(x, z, R)) if (o !== pr) after(0.1, () => damageProp(o, 999));
+}
+function updateProps(dt) {
+  for (const pr of world.props) {
+    if (!pr.alive) continue;
+    const u = pr.mat.userData.u; pr.flash = Math.max(0, pr.flash - dt); pr.wob = Math.max(0, pr.wob - dt * 6);
+    if (pr.fuse >= 0) { pr.fuse -= dt; u.uFlash.value = Math.sin(G.time * 50) > 0 ? 0.85 : 0.2; u.uFlashCol.value.set(0xff3030); if (pr.fuse <= 0) breakProp(pr); }
+    else { u.uFlash.value = pr.flash > 0 ? 1 : 0; u.uFlashCol.value.set(0xffffff); }
+    const sq = Math.sin(pr.wob * 9) * pr.wob * 0.08, w = pr.s.userData.w ??= pr.s.scale.x, h = pr.s.userData.h ??= pr.s.scale.y;
+    pr.s.scale.set(w * (1 + sq), h * (1 - sq), 1);
+  }
 }
 
 function clearWorld() {
   if (world.group) { scene.remove(world.group); world.group.traverse(o => { if (o.geometry && !Object.values(G3).includes(o.geometry)) o.geometry.dispose(); }); }
   world.lights.forEach(l => scene.remove(l)); world.lights = [];
-  world.anim = [];
+  world.anim = []; world.props = []; world.propAt = new Map();
 }
 function buildWorld(secIndex, seed = (Math.random() * 1e9) | 0) {
   clearWorld();
@@ -276,30 +346,34 @@ function buildWorld(secIndex, seed = (Math.random() * 1e9) | 0) {
   Object.assign(world, { W: d.W, H: d.H, grid: d.grid, rooms: d.rooms, start: d.start, vault: d.vault, biome: bk, sector: sec, gateOpen: false, sealOpen: false });
   world.explored = new Uint8Array(d.W * d.H);
   const grp = new THREE.Group(); world.group = grp; scene.add(grp);
-  scene.fog.color.setHex(B.fog); scene.fog.density = B.fogD * 0.85; scene.background.setHex(B.fog);
-  hemi.color.setHex(B.hemi[0]); hemi.groundColor.setHex(B.hemi[1]); hemi.intensity = 1.7; moon.intensity = 1.2; moon.color.set(B.glow).lerp(new THREE.Color(0xffffff), 0.6);
+  scene.fog.color.setHex(B.fog); scene.background.setHex(B.fog);
+  hemi.color.setHex(B.hemi[0]); hemi.groundColor.setHex(B.hemi[1]); hemi.intensity = 2.1; moon.intensity = 1.3; moon.color.set(B.glow).lerp(new THREE.Color(0xffffff), 0.6);
   const surf = biomeSurface(bk), glow = new THREE.Color(B.glow), acc = new THREE.Color(B.accent);
   const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(1, 1, 1), p = new THREE.Vector3(), col = new THREE.Color(), up = new THREE.Vector3(0, 1, 0);
   const R = mulberry(seed + 9);
 
-  // floor tiles (gate + seal cells get floor under them too)
-  const floorCells = []; for (let y = 0; y < d.H; y++) for (let x = 0; x < d.W; x++) if (d.grid[y * d.W + x] !== T_WALL) floorCells.push([x, y]);
+  // floor tiles in four painted variants (gate + seal cells get floor under them too)
   const fgeo = new THREE.PlaneGeometry(TILE, TILE); fgeo.rotateX(-Math.PI / 2);
-  const floors = new THREE.InstancedMesh(fgeo, surf.floor, floorCells.length);
-  floorCells.forEach(([x, y], k) => { q.setFromAxisAngle(up, Math.floor(R() * 4) * Math.PI / 2); m.compose(p.set((x + 0.5) * TILE, 0, (y + 0.5) * TILE), q, s); floors.setMatrixAt(k, m); col.setScalar(0.85 + R() * 0.25); floors.setColorAt(k, col); });
-  grp.add(floors);
-  // walls touching open space
-  const wallCells = [];
+  const byVariant = [[], [], [], []];
+  for (let y = 0; y < d.H; y++) for (let x = 0; x < d.W; x++) if (d.grid[y * d.W + x] !== T_WALL) { const r = R(); byVariant[r < 0.58 ? 0 : r < 0.88 ? 1 : r < 0.96 ? 2 : 3].push([x, y]); }
+  byVariant.forEach((cells, v) => {
+    if (!cells.length) return; const im = new THREE.InstancedMesh(fgeo, surf.floors[v], cells.length);
+    cells.forEach(([x, y], k) => { m.compose(p.set((x + 0.5) * TILE, 0, (y + 0.5) * TILE), q.identity(), s); im.setMatrixAt(k, m); col.setScalar(0.9 + R() * 0.1); im.setColorAt(k, col); });
+    grp.add(im);
+  });
+  // wall blocks, grouped by which sides face open floor so the cap trim follows the maze
+  const open = (x, y) => x >= 0 && y >= 0 && x < d.W && y < d.H && d.grid[y * d.W + x] !== T_WALL;
+  const byMask = {};
   for (let y = 0; y < d.H; y++) for (let x = 0; x < d.W; x++) if (d.grid[y * d.W + x] === T_WALL) {
-    let touch = false;
-    for (let dy = -1; dy <= 1 && !touch; dy++) for (let dx = -1; dx <= 1; dx++) { const xx = x + dx, yy = y + dy; if (xx >= 0 && yy >= 0 && xx < d.W && yy < d.H && d.grid[yy * d.W + xx] !== T_WALL) { touch = true; break; } }
-    wallCells.push([x, y]); // interior rock is filled too, so solid masses never read as voids
+    const mask = (open(x, y - 1) ? 1 : 0) | (open(x + 1, y) ? 2 : 0) | (open(x, y + 1) ? 4 : 0) | (open(x - 1, y) ? 8 : 0);
+    (byMask[mask] ||= []).push([x, y]);
   }
   const wgeo = new THREE.BoxGeometry(TILE, WALL_H, TILE);
-  const uv = wgeo.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setY(i, uv.getY(i) * (WALL_H / TILE));
-  const walls = new THREE.InstancedMesh(wgeo, surf.wall, wallCells.length);
-  wallCells.forEach(([x, y], i) => { const hj = 1 + (R() - 0.5) * 0.1; m.compose(p.set((x + 0.5) * TILE, WALL_H * hj / 2, (y + 0.5) * TILE), q.identity(), s.set(1, hj, 1)); walls.setMatrixAt(i, m); col.setScalar(0.8 + R() * 0.3); walls.setColorAt(i, col); });
-  s.set(1, 1, 1); grp.add(walls);
+  for (const [mask, cells] of Object.entries(byMask)) {
+    const top = surf.top(+mask), im = new THREE.InstancedMesh(wgeo, [surf.side, surf.side, top, top, surf.side, surf.side], cells.length);
+    cells.forEach(([x, y], i) => { m.compose(p.set((x + 0.5) * TILE, WALL_H / 2, (y + 0.5) * TILE), q.identity(), s); im.setMatrixAt(i, m); col.setScalar(0.9 + R() * 0.1); im.setColorAt(i, col); });
+    grp.add(im);
+  }
 
   // energy gates sealing the vault
   world.gateCells = d.gateCells; world.gateMeshes = [];
@@ -316,7 +390,7 @@ function buildWorld(secIndex, seed = (Math.random() * 1e9) | 0) {
   }
   // sealed secret wall
   world.secret = d.secret ? { ...d.secret, found: false, claimed: false } : null; world.sealMeshes = [];
-  if (d.secret) for (const [x, y] of d.secret.seal) { const b = new THREE.Mesh(wgeo, surf.seal); b.position.set((x + 0.5) * TILE, WALL_H / 2, (y + 0.5) * TILE); grp.add(b); world.sealMeshes.push(b); }
+  if (d.secret) for (const [x, y] of d.secret.seal) { const b = new THREE.Mesh(wgeo, [surf.seal, surf.seal, surf.top(0), surf.top(0), surf.seal, surf.seal]); b.position.set((x + 0.5) * TILE, WALL_H / 2, (y + 0.5) * TILE); grp.add(b); world.sealMeshes.push(b); }
 
   // biome props: wall decor and free-standing features
   const kit = propKit(bk); world.kitMats = kit.mats;
@@ -327,8 +401,9 @@ function buildWorld(secIndex, seed = (Math.random() * 1e9) | 0) {
     const n = [[1, 0], [-1, 0], [0, 1], [0, -1]].filter(([dx, dy]) => d.grid[(y + dy) * d.W + x + dx] === T_WALL);
     if (n.length !== 1 || [...wallSpots, ...featureSpots].some(o => Math.abs(o.tx - x) + Math.abs(o.ty - y) < 3)) continue;
     if (d.switches.some(sw => Math.abs(sw.tx - x) + Math.abs(sw.ty - y) < 3) || d.traps.some(tr => Math.abs(tr.tx - x) + Math.abs(tr.ty - y) < 3)) continue;
+    if (!d.rooms.some(r => x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h)) continue; // rooms only, corridors stay clear
     const [dx, dy] = n[0];
-    wallSpots.push({ tx: x, ty: y, x: (x + 0.5 + dx * 0.22) * TILE, z: (y + 0.5 + dy * 0.22) * TILE, ry: Math.atan2(-dx, -dy), s: 0.9 + R() * 0.35, kind: Math.floor(R() * kit.wall.length) });
+    wallSpots.push({ tx: x, ty: y, dx, dy, x: (x + 0.5 + dx * 0.22) * TILE, z: (y + 0.5 + dy * 0.22) * TILE, ry: Math.atan2(-dx, -dy), s: 0.9 + R() * 0.35, kind: Math.floor(R() * kit.wall.length) });
     if (wallSpots.length > 120) break;
   }
   for (const r of d.rooms) {
@@ -336,8 +411,29 @@ function buildWorld(secIndex, seed = (Math.random() * 1e9) | 0) {
     const spots = r.zone === 'vault' ? [] : [[r.x + Math.floor(r.w / 2), r.y + 2]];
     for (const [x, y] of spots) if (d.grid[y * d.W + x] === T_FLOOR && kit.feature.length) { featureSpots.push({ tx: x, ty: y, x: (x + 0.5) * TILE, z: (y + 0.5) * TILE, ry: R() * 6, s: 1, kind: Math.floor(R() * kit.feature.length) }); d.grid[y * d.W + x] = T_WALL; }
   }
-  kit.wall.forEach((parts, k) => instanceParts(grp, parts, wallSpots.filter(w => w.kind === k)));
+  // spots on a north wall face the camera: they get the painted sheet props; side walls keep 3D kit pieces
+  const sheet = PROP_KIT[bk];
+  for (const w of wallSpots) {
+    d.grid[w.ty * d.W + w.tx] = T_WALL;
+    if (w.dy !== -1) continue;
+    const name = sheet.wall[Math.floor(R() * sheet.wall.length)];
+    grp.add(propSprite(name, (w.tx + 0.5) * TILE, (w.ty + 0.5 - 0.28) * TILE));
+  }
+  kit.wall.forEach((parts, k) => instanceParts(grp, parts, wallSpots.filter(w => w.kind === k && w.dy !== -1)));
   kit.feature.forEach((parts, k) => instanceParts(grp, parts, featureSpots.filter(w => w.kind === k)));
+  // breakable cover: crates and explosive barrels in the wing rooms
+  world.props = []; world.propAt = new Map();
+  const taken = [...wallSpots, ...featureSpots, ...d.switches, ...d.traps];
+  for (const r of d.rooms) {
+    if (r.zone !== 'north' && r.zone !== 'south') continue;
+    const want = [...Array(sheet.crates + (R() < 0.5 ? 1 : 0)).fill(sheet.crate), ...Array(Math.round(sheet.barrels * (0.5 + R()))).fill('barrel')];
+    for (const name of want) for (let t = 0; t < 30; t++) {
+      const tx = r.x + 2 + Math.floor(R() * (r.w - 4)), ty = r.y + 2 + Math.floor(R() * (r.h - 4));
+      let clear = true; for (let yy = ty - 1; yy <= ty + 1 && clear; yy++) for (let xx = tx - 1; xx <= tx + 1; xx++) if (d.grid[yy * d.W + xx] !== T_FLOOR) { clear = false; break; }
+      if (!clear || taken.some(o => Math.abs(o.tx - tx) + Math.abs(o.ty - ty) < 3)) continue;
+      addBreakable(name, tx, ty); taken.push({ tx, ty }); break;
+    }
+  }
   // molten / frozen / toxic pools (decorative, glowing)
   if (kit.pool) for (const r of d.rooms) {
     if (r.zone === 'threshold' || r.zone === 'secret' || R() < 0.35) continue;
@@ -368,9 +464,9 @@ function buildWorld(secIndex, seed = (Math.random() * 1e9) | 0) {
 
   // crystal pylons (light sources) tinted per biome
   world.pylons = [];
-  const crystal = MAT.crystal; crystal.color.copy(glow); crystal.emissive.copy(glow); crystal.emissiveIntensity = Math.max(0.3, 2.2 - glow.getHSL({}).l * 2.6);
+  const crystal = MAT.crystal; crystal.color.copy(glow); crystal.emissive.copy(glow); crystal.emissiveIntensity = Math.max(0.25, 1.1 - glow.getHSL({}).l * 1.2);
   const pg = new THREE.CylinderGeometry(0.28, 0.42, 1.4, 8), cg = new THREE.OctahedronGeometry(0.42, 0);
-  const halo = new THREE.SpriteMaterial({ map: TEX.glow, color: glow, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.38 });
+  const halo = new THREE.SpriteMaterial({ map: TEX.glow, depthTest: false, color: glow, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.16 });
   for (const r of d.rooms) {
     if (r.zone === 'secret') continue;
     for (const [tx, ty] of [[r.x + 1, r.y + 1], [r.x + r.w - 2, r.y + 1], [r.x + 1, r.y + r.h - 2], [r.x + r.w - 2, r.y + r.h - 2]]) {
@@ -387,6 +483,7 @@ function buildWorld(secIndex, seed = (Math.random() * 1e9) | 0) {
   // circuit switches (Batch 09 puzzles)
   world.switches = d.switches.map(sw => {
     const x = (sw.tx + 0.5) * TILE, z = (sw.ty + 0.5) * TILE, g = new THREE.Group();
+    g.add(padDecal(0, 0, 3.4));
     const ped = new THREE.Mesh(G3.cyl6, MAT.pylon); ped.scale.set(1.3, 0.9, 1.3); ped.position.y = 0.45; g.add(ped);
     const coreM = new THREE.MeshStandardMaterial({ color: 0x111111, emissive: acc, emissiveIntensity: 1.2, roughness: 0.2 });
     const core = new THREE.Mesh(G3.oct, coreM); core.scale.setScalar(0.8); core.position.y = 1.5; g.add(core);
@@ -440,6 +537,11 @@ function openSeal() {
   world.sealOpenT = 0;
 }
 
+/* the round reactor plate from the props sheet, laid flat on the floor */
+function padDecal(x, z, size) {
+  const m = new THREE.Mesh(G3.plane, new THREE.MeshBasicMaterial({ map: PROPS.pad.tex, transparent: true, alphaTest: 0.3, depthWrite: false }));
+  m.scale.set(size, 1, size * PROPS.pad.h / PROPS.pad.w); m.position.set(x, 0.03, z); m.renderOrder = 1; return m;
+}
 function buildPortal(colr) {
   const grp = new THREE.Group();
   const ringMat = new THREE.MeshStandardMaterial({ color: 0x111111, emissive: colr, emissiveIntensity: 3, metalness: 0.6, roughness: 0.3 });
@@ -449,7 +551,7 @@ function buildPortal(colr) {
   disc.rotation.x = -Math.PI / 2; disc.position.y = 0.05;
   const beam = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.5, 7, 32, 1, true), new THREE.MeshBasicMaterial({ color: colr, transparent: true, opacity: 0.12, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
   beam.position.y = 3.5;
-  grp.add(r1, r2, disc, beam);
+  grp.add(padDecal(0, 0, 4.2), r1, r2, disc, beam);
   const [x, z] = roomCenter(world.vault); grp.position.set(x, 0, z); grp.visible = false;
   world.group.add(grp);
   world.portal = { grp, r1, r2, beam, x, z, active: false };

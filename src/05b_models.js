@@ -71,7 +71,7 @@ function rimMat(o) {
   m.onBeforeCompile = sh => {
     Object.assign(sh.uniforms, m.userData.rim);
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform vec3 uRim; uniform float uRimP;')
-      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n float rimF = pow(1.0 - clamp(abs(dot(normal, normalize(vViewPosition))), 0.0, 1.0), uRimP); totalEmissiveRadiance += uRim * rimF;');
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n vec3 rimV = isOrthographic ? vec3(0.0, 0.0, 1.0) : normalize(vViewPosition); float rimF = pow(1.0 - clamp(abs(dot(normal, rimV)), 0.0, 1.0), uRimP); totalEmissiveRadiance += uRim * rimF;');
   };
   m.customProgramCacheKey = () => 'rimMat';
   return m;

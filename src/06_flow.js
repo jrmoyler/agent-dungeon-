@@ -4,28 +4,20 @@
    controller, camera
 ------------------------------------------------------------------- */
 
-/* ---------- pickups & xp ---------- */
-let shardGeo, shardMat; const pickGeo = {};
-function spawnShard(x, z, val) {
-  if (!shardGeo) { shardGeo = new THREE.OctahedronGeometry(0.16, 0); shardMat = new THREE.MeshStandardMaterial({ color: 0x9ff7ff, emissive: 0x38e8ff, emissiveIntensity: 2.6, metalness: 0.2, roughness: 0.2 }); }
-  const m = new THREE.Mesh(shardGeo, shardMat); m.position.set(x, 0.4, z); scene.add(m);
-  const a = rand() * 6.28; G.shards.push({ m, x, z, val, vx: Math.cos(a) * 3, vz: Math.sin(a) * 3, t: 0 });
+/* ---------- pickups & xp: icons from the props sheet ---------- */
+function iconSprite(name, w, glowCol) {
+  const m = pixelSpriteMat(PROPS[name].tex, { gain: 1.1 }); const s = new THREE.Sprite(m);
+  s.center.set(0.5, 0.5); s.scale.set(w, w * PROPS[name].h / PROPS[name].w, 1); s.renderOrder = 5; scene.add(s); return s;
 }
-function pickupMesh(k) {
-  const it = ITEM_KINDS[k], g = new THREE.Group();
-  const mat = new THREE.MeshStandardMaterial({ color: 0x111111, emissive: it.color, emissiveIntensity: 2.4, metalness: 0.4, roughness: 0.25 });
-  const shell = new THREE.MeshStandardMaterial({ color: 0x2a3142, metalness: 0.9, roughness: 0.3, map: TEX.metal.map });
-  if (it.key === 'heal') { const a = new THREE.Mesh(G3.box, mat); a.scale.set(0.55, 0.18, 0.18); const b = a.clone(); b.scale.set(0.18, 0.55, 0.18); g.add(a, b); const f = new THREE.Mesh(G3.box, shell); f.scale.set(0.7, 0.7, 0.1); f.position.z = -0.1; g.add(f); }
-  else if (it.key === 'power') { const a = new THREE.Mesh(G3.oct, mat); a.scale.set(0.5, 0.8, 0.5); g.add(a); const r = new THREE.Mesh(G3.torus, mat); r.scale.setScalar(1.1); r.rotation.x = Math.PI / 2; g.add(r); }
-  else if (it.key === 'haste') { for (let i = 0; i < 3; i++) { const c = new THREE.Mesh(G3.cone4, mat); c.scale.set(0.45, 0.3, 0.12); c.rotation.z = -Math.PI / 2; c.position.x = (i - 1) * 0.22; g.add(c); } }
-  else { const a = new THREE.Mesh(G3.ico, mat); a.scale.setScalar(0.55); g.add(a); const r = new THREE.Mesh(G3.torus, shell); r.scale.setScalar(1.0); g.add(r); }
-  g.userData.mat = mat; return g;
+function spawnShard(x, z, val) {
+  const m = iconSprite('ic_hex', 0.42); m.position.set(x, 0.4, z);
+  const a = rand() * 6.28; G.shards.push({ m, x, z, val, vx: Math.cos(a) * 3, vz: Math.sin(a) * 3, t: 0 });
 }
 function spawnPickup(x, z) {
   const h = G.p.hero, k = Math.floor(rand() * 4), it = ITEM_KINDS[k];
-  const g = pickupMesh(k); g.position.set(x, 1, z); scene.add(g);
-  const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: TEX.glow, color: it.color, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.6 })); halo.scale.setScalar(2.2); scene.add(halo);
-  const ring = new THREE.Mesh(new THREE.RingGeometry(0.55, 0.7, 32), new THREE.MeshBasicMaterial({ color: it.color, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending, depthWrite: false }));
+  const g = iconSprite(it.icon, 0.85); g.position.set(x, 1, z);
+  const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: TEX.glow, depthTest: false, color: it.color, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.45 })); halo.scale.setScalar(1.8); scene.add(halo);
+  const ring = new THREE.Mesh(new THREE.RingGeometry(0.55, 0.7, 20), new THREE.MeshBasicMaterial({ color: it.color, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending, depthWrite: false }));
   ring.rotation.x = -Math.PI / 2; ring.position.set(x, 0.05, z); scene.add(ring);
   const trap = h.trapChance && rand() < h.trapChance;
   G.pickups.push({ g, halo, ring, x, z, k, t: rand() * 6, trap, life: 25 });
@@ -36,17 +28,17 @@ function updatePickups(dt) {
     s.t += dt; const dx = p.x - s.x, dz = p.z - s.z, d = Math.hypot(dx, dz) || 0.01;
     if (d < mag || s.t > 9) { const sp = 14 + s.t * 4; s.x += dx / d * sp * dt; s.z += dz / d * sp * dt; }
     else { s.vx *= Math.exp(-dt * 4); s.vz *= Math.exp(-dt * 4); s.x += s.vx * dt; s.z += s.vz * dt; }
-    s.m.position.set(s.x, 0.45 + Math.sin(s.t * 5) * 0.1, s.z); s.m.rotation.y += dt * 4;
-    if (d < 0.7) { s.dead = true; scene.remove(s.m); gainXP(s.val); AUDIO.sfx.xp(); }
+    s.m.position.set(s.x, 0.45 + Math.sin(s.t * 5) * 0.1, s.z);
+    if (d < 0.7) { s.dead = true; scene.remove(s.m); s.m.material.dispose(); gainXP(s.val); AUDIO.sfx.xp(); particles.emit(s.x, 0.6, s.z, 0x7fe8ff, 2, { speed: 1.5, life: 0.2, size: 0.16 }); }
   }
   G.shards = G.shards.filter(s => !s.dead);
   for (const it of G.pickups) {
     it.t += dt; it.life -= dt;
-    it.g.position.set(it.x, 1 + Math.sin(it.t * 3) * 0.15, it.z); it.g.rotation.y += dt * 2; it.halo.position.copy(it.g.position); it.ring.scale.setScalar(1 + Math.sin(it.t * 4) * 0.1);
+    it.g.position.set(it.x, 1 + Math.sin(it.t * 3) * 0.15, it.z); it.halo.position.copy(it.g.position); it.ring.scale.setScalar(1 + Math.sin(it.t * 4) * 0.1);
     it.g.visible = it.life < 4 ? Math.sin(it.t * 18) > 0 : true;
     const d = Math.hypot(p.x - it.x, p.z - it.z);
     if (d < 1.1 || it.life <= 0) {
-      it.dead = true; scene.remove(it.g, it.halo, it.ring);
+      it.dead = true; scene.remove(it.g, it.halo, it.ring); it.g.material.dispose();
       if (it.life <= 0) continue;
       if (it.trap) { floatText(p.x, p.z, 'Malicious skill!', 'hurt', 3.2); p.inv = 0; hurtPlayer(14 + G.floor * 2); particles.emit(it.x, 1, it.z, 0xff0000, 20, { speed: 6, life: 0.5 }); continue; }
       applyItem(p, it.k); particles.emit(it.x, 1, it.z, ITEM_KINDS[it.k].color, 24, { speed: 6, life: 0.5 });
@@ -54,7 +46,7 @@ function updatePickups(dt) {
   }
   G.pickups = G.pickups.filter(i => !i.dead);
   if (G.cache && !G.cache.claimed && world.sealOpen) {
-    const c = G.cache; c.g.visible = true; c.t += dt; c.lid.rotation.x = -Math.min(1.2, c.t * 0.4) * 0 ; c.halo.material.opacity = 0.5 + Math.sin(c.t * 3) * 0.2;
+    const c = G.cache; c.g.visible = true; c.t += dt; c.halo.material.opacity = 0.5 + Math.sin(c.t * 3) * 0.2; c.spr.position.y = Math.sin(c.t * 2) * 0.06;
     if (Math.hypot(p.x - c.x, p.z - c.z) < 1.8) claimCache();
   }
 }
@@ -64,7 +56,7 @@ function applyItem(p, k) {
   if (ik.key === 'power') p.buffs.power = 8;
   if (ik.key === 'haste') p.buffs.haste = 8;
   if (ik.key === 'charge') for (const k2 of MOVE_KEYS) p.cds[k2] = 0;
-  toast(`<i class="tdot" style="--c:#${ik.color.toString(16).padStart(6, '0')}"></i><b>${ik.label}</b><span>${ik.sub}</span>`);
+  toast(`<b>${ik.label}</b><span>${ik.sub}</span>`, ik.icon);
 }
 function gainXP(v) {
   const p = G.p; p.xp += v;
@@ -75,16 +67,10 @@ function gainXP(v) {
 function buildCache() {
   G.cache = null; if (!world.secret) return;
   const r = world.secret.room, [x, z] = roomCenter(r), col = new THREE.Color(BIOMES[world.biome].accent);
-  const g = new THREE.Group();
-  const shell = new THREE.MeshStandardMaterial({ color: 0x3a3020, metalness: 0.8, roughness: 0.35, map: TEX.metal.map });
-  const trim = new THREE.MeshStandardMaterial({ color: 0x111111, emissive: col, emissiveIntensity: 2.5 });
-  const body = new THREE.Mesh(G3.box, shell); body.scale.set(1.6, 0.8, 1.0); body.position.y = 0.4; g.add(body);
-  const lid = new THREE.Mesh(G3.box, shell); lid.scale.set(1.65, 0.3, 1.05); lid.position.y = 0.95; g.add(lid);
-  for (const y of [0.15, 0.82]) { const b = new THREE.Mesh(G3.box, trim); b.scale.set(1.66, 0.06, 1.06); b.position.y = y; g.add(b); }
-  const gem = new THREE.Mesh(G3.oct, trim); gem.scale.setScalar(0.3); gem.position.set(0, 0.55, 0.52); g.add(gem);
-  g.position.set(x, 0, z); g.visible = false; scene.add(g);
-  const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: TEX.glow, color: col, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.6 })); halo.scale.setScalar(4); halo.position.set(x, 1, z); g.add(halo); halo.position.set(0, 1, 0);
-  G.cache = { g, lid, halo, x, z, t: 0, claimed: false };
+  const g = new THREE.Group(), spr = propSprite('cache', 0, 0); g.add(spr);
+  const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: TEX.glow, depthTest: false, color: col, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.6 })); halo.scale.setScalar(4); halo.position.set(0, 1, 0); g.add(halo);
+  g.add(padDecal(0, 0, 3)); g.position.set(x, 0, z); g.visible = false; scene.add(g);
+  G.cache = { g, spr, halo, x, z, t: 0, claimed: false };
 }
 function claimCache() {
   const c = G.cache, p = G.p; c.claimed = true; G.secretsFound++;
@@ -223,21 +209,22 @@ function openPortal() {
 }
 
 /* ---------- camera ---------- */
-const camState = { x: 0, z: 0, h: 20 };
+const camState = { x: 0, z: 0, kx: 0, kz: 0, kvx: 0, kvz: 0 }; // no zoom: pixel art keeps one scale
 function updateCamera(dt) {
   const p = G.p;
-  if (G.camOverride) { const o = G.camOverride; camera.position.set(p.x + o[0], o[1], p.z + o[2]); camera.lookAt(p.x + o[3], o[4], p.z + o[5]); return; } const portrait = window.innerWidth < window.innerHeight;
-  const look = 1.6; let tx = p.x + p.aimX * look, tz = p.z + p.aimZ * look;
+  const look = 1.4; let tx = p.x + p.aimX * look, tz = p.z + p.aimZ * look;
   // boss fights: frame the agent and the nearest guardian together
   const b = G.bosses.filter(b => b.alive).sort((a, c) => Math.hypot(a.x - p.x, a.z - p.z) - Math.hypot(c.x - p.x, c.z - p.z))[0];
-  if (b && Math.hypot(b.x - p.x, b.z - p.z) < 22) { tx = lerp(tx, b.x, 0.4); tz = lerp(tz, b.z - 4, 0.45); }
-  camState.x = lerp(camState.x, tx, 1 - Math.exp(-dt * 6)); camState.z = lerp(camState.z, tz, 1 - Math.exp(-dt * 6));
-  const want = (portrait ? 17 : 20) + (G.stage === 'boss' ? 5 : 0); camState.h = lerp(camState.h, want, 1 - Math.exp(-dt * 2));
-  const H = camState.h, B = H * (portrait ? 0.44 : 0.5);
-  const tr = G.shake * G.shake, sx = (rand() - 0.5) * tr * 1.2, sz = (rand() - 0.5) * tr * 1.2;
-  camera.position.set(camState.x + sx, H, camState.z + B + sz);
-  camera.lookAt(camState.x + sx * 0.5, 0, camState.z + sz * 0.5);
-  G.shake = Math.max(0, G.shake - dt * 1.6);
+  if (b && Math.hypot(b.x - p.x, b.z - p.z) < 22) { tx = lerp(tx, b.x, 0.35); tz = lerp(tz, b.z, 0.35); }
+  camState.x = lerp(camState.x, tx, 1 - Math.exp(-dt * 7)); camState.z = lerp(camState.z, tz, 1 - Math.exp(-dt * 7));
+  // directional kick springs back; trauma shake uses smooth pseudo-noise so it rolls instead of buzzing
+  camState.kvx += G.kick.x * 18; camState.kvz += G.kick.z * 18;
+  camState.kvx += (-camState.kx * 260 - camState.kvx * 22) * dt; camState.kvz += (-camState.kz * 260 - camState.kvz * 22) * dt;
+  camState.kx += camState.kvx * dt; camState.kz += camState.kvz * dt; G.kick.x = G.kick.z = 0;
+  const tr = G.shake * G.shake * 0.9, T = G.time * 38;
+  const sx = tr * (Math.sin(T * 1.1) + Math.sin(T * 2.3 + 1.7) * 0.5), sz = tr * (Math.sin(T * 1.37 + 0.6) + Math.sin(T * 2.9) * 0.5);
+  placeCamera(camState.x + sx + camState.kx, camState.z + sz + camState.kz);
+  G.shake = Math.max(0, G.shake - dt * 1.8);
 }
 
 /* ---------- player controller ---------- */
@@ -253,8 +240,8 @@ function updatePlayer(dt) {
   } else if (input.mouseIn) {
     raycaster.setFromCamera(new THREE.Vector2(input.mouseX, input.mouseY), camera);
     const hit = raycaster.ray.intersectPlane(groundPlane, tmpV);
-    if (hit) { const dx = hit.x - p.x, dz = hit.z - p.z, l = Math.hypot(dx, dz); if (l > 0.2) { p.aimX = dx / l; p.aimZ = dz / l; } }
-  }
+    if (hit) { const dx = hit.x - p.x, dz = hit.z - p.z, l = Math.hypot(dx, dz); if (l > 0.2) { p.aimX = dx / l; p.aimZ = dz / l; } p.aimDist = clamp(l, 1.6, 14); }
+  } else p.aimDist = 5;
   if (s8.confuse > 0) { const a = Math.atan2(p.aimZ, p.aimX) + Math.sin(G.time * 7) * 0.45; p.aimX = Math.cos(a); p.aimZ = Math.sin(a); }
   // move
   let mx = input.right - input.left, mz = input.down - input.up;
@@ -269,13 +256,24 @@ function updatePlayer(dt) {
     const dx = ml > 0.1 ? mx : p.aimX, dz = ml > 0.1 ? mz : p.aimZ, l = Math.hypot(dx, dz) || 1;
     p.dashDir = [dx / l, dz / l]; p.dashT = 0.17 * (h.dashMul || 1); p.dashCd = dashCdBase; AUDIO.sfx.dash();
     setReact(p, 'dash', p.dashT + 0.08, { loop: true, fps: 18, flip: p.dashDir[0] < -0.1 ? -1 : 1 });
+    p.sq = -0.16; p.sqV = 0; p.ghostT = 0; shockRing(p.x, p.z, 1.3, h.color, 0.22); flashLight(p.x, 1, p.z, h.color, 25, 0.18);
+    particles.emit(p.x, 0.15, p.z, 0xa8b4d8, 8, { speed: 3, life: 0.35, size: 0.22, up: 0.2, dir: [-p.dashDir[0] * 4, -p.dashDir[1] * 4] });
   }
   input.dash = false; p.dashMax = dashCdBase;
   if (p.dashT > 0) {
     p.dashT -= dt; const ds = p.st.spd * 3.6; p.vx = p.dashDir[0] * ds; p.vz = p.dashDir[1] * ds;
-    particles.emit(p.x, 0.8, p.z, h.color, 3, { speed: 1, life: 0.35, size: 0.4, grav: 0 });
-  } else { p.vx = lerp(p.vx, mx * spd, 1 - Math.exp(-dt * 14)); p.vz = lerp(p.vz, mz * spd, 1 - Math.exp(-dt * 14)); }
+    p.ghostT -= dt; if (p.ghostT <= 0) { p.ghostT = 0.03; dropGhost(p); }
+    particles.emit(p.x, 0.9, p.z, h.color, 2, { speed: 0.6, life: 0.3, size: 0.26, grav: 0 });
+    if (p.dashT <= 0) { p.sq = 0.12; p.vx *= 0.45; p.vz *= 0.45; particles.emit(p.x, 0.15, p.z, 0xa8b4d8, 6, { speed: 2.5, life: 0.3, size: 0.2, up: 0.2 }); }
+  } else {
+    // quick to accelerate, a touch slower to stop: weight without sludge
+    const rate = ml > 0.1 ? 16 : 11;
+    p.vx = lerp(p.vx, mx * spd, 1 - Math.exp(-dt * rate)); p.vz = lerp(p.vz, mz * spd, 1 - Math.exp(-dt * rate));
+  }
   moveCircle(p, p.vx * dt, p.vz * dt, p.r);
+  updateGhosts(p, dt);
+  // squash & stretch spring
+  p.sqV += (-340 * p.sq - 20 * p.sqV) * dt; p.sq += p.sqV * dt;
   // timers
   p.inv = Math.max(0, p.inv - dt); p.slowT = Math.max(0, p.slowT - dt);
   for (const k of MOVE_KEYS) p.cds[k] = Math.max(0, p.cds[k] - dt);
@@ -301,6 +299,7 @@ function updatePlayer(dt) {
   // animation
   p.moving = Math.hypot(p.vx, p.vz) > 0.6;
   if (p.moving) p.walkT += dt * Math.hypot(p.vx, p.vz) * 0.85;
+  if (p.moving && p.dashT <= 0) { p.stepT -= dt * Math.hypot(p.vx, p.vz); if (p.stepT <= 0) { p.stepT = 2.1; particles.emit(p.x, 0.12, p.z, 0x8a96bc, 2, { speed: 0.8, life: 0.4, size: 0.2, grav: -0.6, up: 0.1, lift: 0.4 }); } }
   if (!p.react && p.buffs.haste > 0 && p.moving && !p.atk) setReact(p, 'run', 0.2, { loop: true, fps: 12, flip: p.vx < -0.1 ? -1 : 1 });
   if (p.react && p.react.name === 'run' && (!p.moving || p.buffs.haste <= 0 || p.atk)) p.react = null;
   if (p.react && p.react.name === 'run') p.react.flip = p.vx < -0.1 ? -1 : 1;
@@ -309,15 +308,22 @@ function updatePlayer(dt) {
   const [idx, flip, lift] = agentFrame(p, dt);
   p.sprite.set(idx, flip);
   const breathe = !p.moving && !p.atk && !p.react ? 1 + Math.sin(G.time * 2.4) * 0.012 : 1;
-  p.sprite.spr.scale.y = p.sprite.scale * breathe;
+  const sq = clamp(p.sq, -0.25, 0.25);
+  p.sprite.spr.scale.set(p.sprite.scale * flip * (1 + sq), p.sprite.scale * breathe * (1 - sq * 0.9), 1);
   p.sprite.spr.position.set(p.x, lift, p.z);
+  p.sil.position.copy(p.sprite.spr.position); p.sil.scale.copy(p.sprite.spr.scale);
+  // aim marks: reticle on the floor where you aim, chevron at the feet
+  const A = p.aim, aimLen = p.aimDist ?? 5;
+  A.ret.position.set(p.x + p.aimX * aimLen, 0.06, p.z + p.aimZ * aimLen); A.ret.rotation.y = G.time * 1.5;
+  A.chev.position.set(p.x + p.aimX * 1.05, 0.06, p.z + p.aimZ * 1.05); A.chev.rotation.y = -Math.atan2(p.aimZ, p.aimX);
+  A.mat.opacity = p.dead ? 0 : 0.75 + Math.sin(G.time * 6) * 0.1;
   const u = p.sprite.mat.userData.u;
   if (p.hurtFlash > 0) { p.hurtFlash -= dt; u.uFlash.value = 0.6; u.uFlashCol.value.setRGB(1, 0.25, 0.3); }
   else if (s8.burn > 0 || s8.poison > 0) { u.uFlash.value = 0.25 + Math.sin(G.time * 12) * 0.1; u.uFlashCol.value.set(STATUS[s8.burn > 0 ? 'burn' : 'poison'].color); }
   else if (p.buffs.power > 0) { u.uFlash.value = 0.12 + Math.sin(G.time * 8) * 0.08; u.uFlashCol.value.set(0xff6a5a); }
   else u.uFlash.value = 0;
   p.sprite.mat.opacity = p.inv > 0 && Math.floor(G.time * 20) % 2 ? 0.6 : 1;
-  p.light.position.set(p.x, 2.4, p.z); p.light.intensity = 30 + (p.buffs.power > 0 ? 18 : 0);
+  p.light.position.set(p.x, 2.6, p.z); p.light.intensity = 14 + (p.buffs.power > 0 ? 10 : 0);
   p.shadow.position.set(p.x, 0.03, p.z);
   if (G.portalOpen && Math.hypot(p.x - world.portal.x, p.z - world.portal.z) < 1.7) nextFloor();
 }
