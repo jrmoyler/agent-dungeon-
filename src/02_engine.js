@@ -21,7 +21,7 @@ scene.fog = new THREE.Fog(0x04060b, 60, 110);
    unit, chosen so a floor tile (2 units, 40 texels) maps texel-for-pixel. */
 const PPU = 20, TEXELS_PER_TILE = 40;
 const CAM_PITCH = THREE.MathUtils.degToRad(55), CAM_DIST = 40;
-const VIEW = { scale: 2, lw: 2, lh: 2, offX: 0, offY: 0, zoom: 1, cropX: 0, cropY: 0 };
+const VIEW = { scale: 2, lw: 2, lh: 2, offX: 0, offY: 0, zoom: 1, cropX: 0, cropY: 0, tx: 0, tz: 0 };
 const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.5, 140);
 camera.aspect = 1;
 const SPRITE_TILT = { value: Math.tan(CAM_PITCH) };
@@ -72,6 +72,7 @@ function resize() {
   const u = pixelBlit.material.uniforms; u.uLow.value.set(VIEW.lw, VIEW.lh); u.uScale.value = scale;
   camera.aspect = VIEW.lw / VIEW.lh;
   applyZoom(VIEW.zoom);
+  PIX.weather?.resize();
 }
 function applyZoom(z) {
   VIEW.zoom = z; const hw = VIEW.lw / 2 / (PPU * z), hh = VIEW.lh / 2 / (PPU * z);
@@ -84,6 +85,7 @@ window.addEventListener('resize', resize);
 const CAM_UP = new THREE.Vector3(0, Math.cos(CAM_PITCH), -Math.sin(CAM_PITCH));
 function placeCamera(tx, tz) {
   const ppu = PPU * VIEW.zoom, sp = Math.sin(CAM_PITCH);
+  VIEW.tx = tx; VIEW.tz = tz;
   const sx = tx * ppu, sy = -tz * sp * ppu, rx = sx - Math.round(sx), ry = sy - Math.round(sy);
   const cx = Math.round(sx) / ppu, cz = -Math.round(sy) / (sp * ppu);
   camera.position.set(cx, CAM_DIST * Math.sin(CAM_PITCH), cz + CAM_DIST * Math.cos(CAM_PITCH));
@@ -183,40 +185,41 @@ function dataTex(data, size, srgb) {
 }
 const rgbOf = hex => { const c = new THREE.Color(hex); return [c.r * 255, c.g * 255, c.b * 255]; };
 
-/* ---------- BIOMES: palettes + surface patterns mimicking the Batch 08 dungeon sheets ---------- */
+/* ---------- BIOMES ----------
+   Stone-and-torchlight palettes tuned to the agent sprites: warm fire, cool stone, moss and wood.
+   glow/accent stay each sector's identity colour (HUD, gates, relays, the vault circle); flame is
+   the colour of its torches and braziers, cover the ground tufts the Pixi layer paints. */
 const BIOMES = {
-  core_facility:   { floor:'panel',   wall:'tech',     base:'#2a3f52', dark:'#0f1a24', glow:'#21c8f1', accent:'#ce983e', fog:0x050b12, fogD:0.024, hemi:[0x7fb6d8, 0x10161c], rough:0.55, metal:0.55, particle:'motes', light:0x48d8ff },
-  shadow_realm:    { floor:'flag',    wall:'obsidian', base:'#5a4688', dark:'#1c1434', glow:'#ad6bfa', accent:'#f3a2ff', fog:0x08051a, fogD:0.03,  hemi:[0x9b7fd8, 0x140c1c], rough:0.7,  metal:0.2,  particle:'wisps', light:0xb67bff },
-  voltage_foundry: { floor:'diamond', wall:'plating',  base:'#5a6572', dark:'#1c2026', glow:'#3cc6ff', accent:'#ffc33e', fog:0x070a0e, fogD:0.025, hemi:[0x98b4cc, 0x1a1610], rough:0.45, metal:0.8,  particle:'sparks', light:0x7fd8ff },
-  inferno_depths:  { floor:'basalt',  wall:'basalt',   base:'#4a2c26', dark:'#170807', glow:'#ff7233', accent:'#f8ce6a', fog:0x140503, fogD:0.028, hemi:[0xffa070, 0x200805], rough:0.85, metal:0.1,  particle:'embers', light:0xff7a33 },
-  glacial_vault:   { floor:'ice',     wall:'ice',      base:'#5c8ea8', dark:'#16303f', glow:'#8ae4ff', accent:'#d4f9ff', fog:0x0a1820, fogD:0.026, hemi:[0xbfe8ff, 0x10202a], rough:0.18, metal:0.05, particle:'snow', light:0x9fe8ff },
-  toxic_hive:      { floor:'hive',    wall:'resin',    base:'#4f6a3a', dark:'#141f0f', glow:'#9bea52', accent:'#e1e87d', fog:0x081106, fogD:0.03,  hemi:[0xb8e090, 0x0d1408], rough:0.6,  metal:0.1,  particle:'spores', light:0xa8f060 },
-  astral_rift:     { floor:'void',    wall:'voidstone',base:'#463c7a', dark:'#0e0c28', glow:'#b976ff', accent:'#68d7fe', fog:0x05031a, fogD:0.022, hemi:[0x9a8cff, 0x0a0618], rough:0.4,  metal:0.35, particle:'stars', light:0xc08bff },
-  chrono_spire:    { floor:'marble',  wall:'marble',   base:'#8a7d68', dark:'#2c261e', glow:'#f0c77e', accent:'#b1f7f4', fog:0x100c08, fogD:0.024, hemi:[0xffe2b0, 0x1a140c], rough:0.32, metal:0.25, particle:'dust', light:0xffd27a },
+  core_facility:   { floor:'flag',      wall:'brick',     base:'#7a828c', dark:'#1b1f27', moss:'#5f8a3a', flame:['#fff4c4','#ffc04a','#e4561f'], banner:'#2c4f9a', glow:'#21c8f1', accent:'#ce983e', fog:0x07090c, hemi:[0x8c9ab8, 0x1c140c], metal:0.1,  light:0xff9a40, particle:'dust',   weather:'dust',   cover:['grass','grass','pebble','flower','grass','rubble','bone','pebble'] },
+  shadow_realm:    { floor:'slate',     wall:'rough',     base:'#655d7e', dark:'#140f22', moss:'#4d6a6a', flame:['#f6ecff','#c08cff','#6438c8'], banner:'#5a2a7a', glow:'#ad6bfa', accent:'#f3a2ff', fog:0x07051a, hemi:[0x8a78c8, 0x120a1a], metal:0.1,  light:0xb07cff, particle:'wisps',  weather:'wisps',  cover:['gshroom','gshroom','pebble','crystal','bone','rubble','gshroom','grass'] },
+  voltage_foundry: { floor:'iron',      wall:'forge',     base:'#78706a', dark:'#19161a', moss:'#8a5a2c', flame:['#fffbe0','#ffd45a','#ff7a24'], banner:'#8a2a22', glow:'#3cc6ff', accent:'#ffc33e', fog:0x09080a, hemi:[0x9aa0b0, 0x1a140e], metal:0.4,  light:0xffb060, particle:'sparks', weather:'ash',    cover:['rubble','pebble','rubble','bone','pebble','rubble','pebble','grass'] },
+  inferno_depths:  { floor:'basalt',    wall:'basalt',    base:'#56403a', dark:'#120807', moss:'#4a2a20', flame:['#fff2b0','#ffae38','#ff4818'], banner:'#7a1a14', glow:'#ff7233', accent:'#f8ce6a', fog:0x120403, hemi:[0xffa070, 0x200805], metal:0.1,  light:0xff7030, particle:'embers', weather:'embers', cover:['ember','ember','rubble','pebble','bone','ember','rubble','pebble'] },
+  glacial_vault:   { floor:'snow',      wall:'iceblock',  base:'#9cbcd2', dark:'#1e3546', moss:'#e2f2fa', flame:['#ffffff','#a8eaff','#3a96d8'], banner:'#2a6a9a', glow:'#8ae4ff', accent:'#d4f9ff', fog:0x0a1620, hemi:[0xbfe0ff, 0x10202a], metal:0.05, light:0x9fdcff, particle:'snow',   weather:'snow',   cover:['ice','ice','pebble','grass','ice','rubble','bone','ice'] },
+  toxic_hive:      { floor:'moss',      wall:'roots',     base:'#66724a', dark:'#12170c', moss:'#78a83a', flame:['#f6ffd0','#b6f05a','#4a9a2a'], banner:'#3f6a1a', glow:'#9bea52', accent:'#e1e87d', fog:0x070d05, hemi:[0xa8d088, 0x0d1408], metal:0.05, light:0xb0f060, particle:'spores', weather:'spores', cover:['shroom','grass','gshroom','grass','shroom','grass','bone','pebble'] },
+  astral_rift:     { floor:'starstone', wall:'rough',     base:'#55507c', dark:'#0c0a20', moss:'#5a4a9a', flame:['#ffffff','#c9a0ff','#6a48e0'], banner:'#3a2a7a', glow:'#b976ff', accent:'#68d7fe', fog:0x05031a, hemi:[0x9a8cff, 0x0a0618], metal:0.2,  light:0xb48cff, particle:'stars',  weather:'stars',  cover:['crystal','crystal','pebble','rubble','gshroom','crystal','pebble','bone'] },
+  chrono_spire:    { floor:'sand',      wall:'sandstone', base:'#ad9474', dark:'#2a2016', moss:'#7a8a44', flame:['#fffbe0','#ffd27a','#e8862a'], banner:'#8a5a1a', glow:'#f0c77e', accent:'#b1f7f4', fog:0x0e0b07, hemi:[0xffe2b0, 0x1a140c], metal:0.15, light:0xffc870, particle:'dust',   weather:'dust',   cover:['straw','straw','grass','pebble','flower','rubble','bone','pebble'] },
 };
+for (const k in BIOMES) BIOMES[k].key = k;
 
 /* ---------- BIOME PIXEL TILES ----------
-   Floors are painted at 40x40 texels per tile so one texel lands on one low-res pixel. Each biome
-   gets four floor variants (plain, plain-alt, circuit/feature, accent), a wall face and a wall cap
-   whose neon trim is drawn only on the sides that border open floor, so the trim traces the maze. */
+   Floors, wall faces and wall tops are painted at 40 texels per tile so one texel lands on one
+   low-res pixel, in the sprites' idiom: chunky stones with a lit top-left lip, a shadowed
+   bottom-right, dark mortar, moss, cracks and pebbles. Emissive texels are kept for things that
+   really glow (lava, forge pits, glowing fungus, runes). */
 function pal(bk) {
-  const B = BIOMES[bk], d = rgbOf(B.dark), b = rgbOf(B.base), g = rgbOf(B.glow), a = rgbOf(B.accent);
-  const mix = (x, y, t) => x.map((v, i) => clamp(v + (y[i] - v) * t, 0, 255));
-  return { o: mix(d, [0, 0, 0], 0.5), d, m: mix(d, b, 0.5), b, h: mix(b, [255, 255, 255], 0.25), g, a, mix };
+  const B = BIOMES[bk], d = rgbOf(B.dark), b = rgbOf(B.base), mix = (x, y, t) => x.map((v, i) => clamp(v + (y[i] - v) * t, 0, 255));
+  return { o: mix(d, [0, 0, 0], 0.45), d, m: mix(d, b, 0.55), b, h: mix(b, [255, 255, 255], 0.28), g: rgbOf(B.glow), a: rgbOf(B.accent), mo: rgbOf(B.moss), f: rgbOf(B.flame[1]), f2: rgbOf(B.flame[2]), f0: rgbOf(B.flame[0]), mix };
 }
-function pxCanvas(S, H = S) { return { S, H, alb: new Uint8Array(S * H * 4), emi: new Uint8Array(S * H * 4) }; }
+function pxCanvas(S, H = S) { return { S, H, alb: new Uint8Array(S * H * 4), emi: new Uint8Array(S * H * 4), mort: new Uint8Array(S * H) }; }
 function put(P, x, y, c, e) {
   x = Math.round(x); y = Math.round(y); if (x < 0 || y < 0 || x >= P.S || y >= P.H) return;
   const i = (y * P.S + x) * 4; P.alb[i] = c[0]; P.alb[i + 1] = c[1]; P.alb[i + 2] = c[2]; P.alb[i + 3] = 255;
   if (e) { P.emi[i] = e[0]; P.emi[i + 1] = e[1]; P.emi[i + 2] = e[2]; P.emi[i + 3] = 255; }
 }
 function rect(P, x0, y0, w, h, c, e) { for (let y = y0; y < y0 + h; y++) for (let x = x0; x < x0 + w; x++) put(P, x, y, c, e); }
-function bevel(P, x0, y0, w, h, C, hi = C.h) { // 1px seam on top/left, light lip, dark lip
-  for (let x = x0; x < x0 + w; x++) { put(P, x, y0, C.o); put(P, x, y0 + 1, hi); put(P, x, y0 + h - 1, C.d); }
-  for (let y = y0; y < y0 + h; y++) { put(P, x0, y, C.o); if (y > y0) put(P, x0 + 1, y, hi); put(P, x0 + w - 1, y, C.d); }
-}
 function line(P, x0, y0, x1, y1, c, e) { const n = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0)) || 1; for (let i = 0; i <= n; i++) put(P, x0 + (x1 - x0) * i / n, y0 + (y1 - y0) * i / n, c, e); }
 function ring(P, cx, cy, r, c, e, ticks = 0) { for (let k = 0; k < 160; k++) { const a = k / 160 * 6.283; if (ticks && Math.floor(k / 160 * ticks * 2) % 2) continue; put(P, cx + Math.cos(a) * r, cy + Math.sin(a) * r, c, e); } }
+function shadeRow(P, y, k) { if (y < 0 || y >= P.H) return; for (let x = 0; x < P.S; x++) { const i = (y * P.S + x) * 4; P.alb[i] *= k; P.alb[i + 1] *= k; P.alb[i + 2] *= k; } }
 /* data -> nearest-filtered texture; painter rows run top-down, texture rows bottom-up */
 function pxTex(P, which, srgb) {
   const src = P[which], out = new Uint8Array(src.length), row = P.S * 4;
@@ -226,119 +229,198 @@ function pxTex(P, which, srgb) {
   t.magFilter = t.minFilter = THREE.NearestFilter; t.generateMipmaps = false;
   if (srgb) t.colorSpace = THREE.SRGBColorSpace; t.needsUpdate = true; return t;
 }
+const noiseAt = (n, S, x, y) => n[(((y % S) + S) % S) * S + (((x % S) + S) % S)];
+function mortarFill(P, c) { rect(P, 0, 0, P.S, P.H, c); P.mort.fill(1); }
+/* one stone: noise-shaded body, lit top/left lip, shadowed bottom/right, chipped corners */
+function stone(P, x0, y0, w, h, C, n, r, tone = 0) {
+  const lo = C.mix(C.d, C.m, 0.6 + tone), mid = C.mix(C.m, C.b, 0.5 + tone), hi = C.mix(C.b, C.h, 0.4 + tone);
+  for (let y = y0; y < y0 + h; y++) for (let x = x0; x < x0 + w; x++) {
+    if (x < 0 || y < 0 || x >= P.S || y >= P.H) continue;
+    const k = noiseAt(n, P.S, x, y);
+    put(P, x, y, y === y0 || x === x0 ? hi : y === y0 + h - 1 || x === x0 + w - 1 ? lo : k < 0.36 ? lo : k > 0.68 ? hi : mid); P.mort[y * P.S + x] = 0;
+  }
+  for (const [cx, cy] of [[x0, y0], [x0 + w - 1, y0], [x0, y0 + h - 1], [x0 + w - 1, y0 + h - 1]]) if (r() < 0.55) put(P, cx, cy, C.o);
+}
+function flagRows(P, C, n, r, rows, wMin = 9, wVar = 9) { let y = 0; for (const h of rows) { let x = -Math.floor(r() * 10); while (x < P.S) { const w = wMin + Math.floor(r() * wVar); stone(P, x + 1, y + 1, w - 1, h - 1, C, n, r, (r() - 0.5) * 0.3); x += w; } y += h; } }
+/* irregular flagstones: each quarter is one slab or split in two, so joints never line up into brick courses */
+function flagstones(P, C, n, r) {
+  const s = P.S / 2, st = (x, y, w, h) => stone(P, x + 1, y + 1, w - 1, h - 1, C, n, r, (r() - 0.5) * 0.3);
+  for (let j = 0; j < 2; j++) for (let i = 0; i < 2; i++) {
+    const x = i * s, y = j * s, k = r(), cut = 7 + Math.floor(r() * 6);
+    if (k < 0.4) st(x, y, s, s); else if (k < 0.7) { st(x, y, cut, s); st(x + cut, y, s - cut, s); } else { st(x, y, s, cut); st(x, y + cut, s, s - cut); }
+  }
+}
+function slabs(P, C, n, r, k) { const s = P.S / k; for (let j = 0; j < k; j++) for (let i = 0; i < k; i++) stone(P, i * s + 1, j * s + 1, s - 1, s - 1, C, n, r, (r() - 0.5) * 0.25); }
+/* moss (or rust, frost, ash) creeps out of the mortar */
+function mossy(P, C, n, thr, r, spill = 0.15, col = C.mo) {
+  for (let y = 0; y < P.H; y++) for (let x = 0; x < P.S; x++) {
+    if (noiseAt(n, P.S, x + 13, y + 7) < thr) continue;
+    if (P.mort[y * P.S + x] || r() < spill) put(P, x, y, r() < 0.3 ? C.mix(col, [255, 255, 255], 0.22) : r() < 0.6 ? col : C.mix(col, C.d, 0.45));
+  }
+}
+function cracks(P, C, r, k, glow) {
+  for (let c = 0; c < k; c++) {
+    let x = 4 + r() * (P.S - 8), y = 4 + r() * (P.H - 8), a = r() * 6.283;
+    for (let i = 0; i < 9 + r() * 10; i++) { put(P, x, y, glow ? C.mix(C.f, C.f2, 0.4) : C.o, glow ? C.f2 : null); if (!glow) put(P, x + 1, y + 1, C.mix(C.m, C.b, 0.6)); a += (r() - 0.5) * 1.1; x += Math.cos(a); y += Math.sin(a); }
+  }
+}
+function pebbles(P, C, r, k) { for (let i = 0; i < k; i++) { const x = 3 + r() * (P.S - 6), y = 3 + r() * (P.H - 6); put(P, x, y, C.h); put(P, x + 1, y, C.m); put(P, x, y + 1, C.o); put(P, x + 1, y + 1, C.o); } }
+function puddle(P, cx, cy, rx, ry, deep, lite, e) {
+  for (let y = -ry; y <= ry; y++) for (let x = -rx; x <= rx; x++) { const d = (x / rx) ** 2 + (y / ry) ** 2; if (d > 1) continue; put(P, cx + x, cy + y, d > 0.7 ? lite : deep, e); }
+  line(P, cx - rx * 0.5, cy - ry * 0.35, cx - rx * 0.1, cy - ry * 0.35, [235, 245, 255], e);
+}
+function grate(P, C, x0, y0, w, h, hot) {
+  rect(P, x0 - 1, y0 - 1, w + 2, h + 2, C.o);
+  for (let y = y0; y < y0 + h; y++) for (let x = x0; x < x0 + w; x++) {
+    const bar = (x - x0) % 3 === 0 || (y - y0) % 5 === 0;
+    if (bar) put(P, x, y, (x - x0) % 3 === 0 ? [92, 96, 108] : [58, 62, 72]);
+    else put(P, x, y, hot ? C.mix(C.f, C.f2, (y - y0) / h) : [10, 10, 14], hot ? C.mix(C.f2, [0, 0, 0], 0.15 + 0.5 * (y - y0) / h) : null);
+  }
+}
 function paintFloor(bk, v, seed) {
-  // floors sit one step brighter than wall caps so the walkable space reads at a glance
-  const S = TEXELS_PER_TILE, P = pxCanvas(S), C0 = pal(bk), B = BIOMES[bk], r = mulberry(seed + v * 31);
-  const C = { ...C0, o: C0.d, d: C0.m, m: C0.mix(C0.m, C0.b, 0.6), b: C0.mix(C0.b, C0.h, 0.5) };
-  const n = makeNoise(S, seed + v, 3), hash = () => r(), soft = C.mix(C.m, C.h, 0.4);
-  const base = (lo, mid, hi, lt = 0.3, ht = 0.72) => { for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) { const k = n[y * S + x] + (hash() - 0.5) * 0.12; put(P, x, y, k < lt ? lo : k > ht ? hi : mid); } };
-  const glowLine = (pts, col = C.g) => { const e = C.mix(col, [0, 0, 0], 0.35); for (let i = 0; i < pts.length - 1; i++) line(P, ...pts[i], ...pts[i + 1], C.mix(col, C.d, 0.35), e); };
-  const node = (x, y, col = C.g) => { rect(P, x - 1, y - 1, 3, 3, C.o); put(P, x, y, [255, 255, 255], col); };
-  const stripes = (x0, y0, w, h) => { for (let y = y0; y < y0 + h; y++) for (let x = x0; x < x0 + w; x++) put(P, x, y, Math.floor((x + y) / 3) % 2 ? C.a : C.o, Math.floor((x + y) / 3) % 2 ? C.mix(C.a, [0, 0, 0], 0.7) : null); };
+  const S = TEXELS_PER_TILE, P = pxCanvas(S), C = pal(bk), B = BIOMES[bk], r = mulberry(seed + v * 31), n = makeNoise(S, seed + v * 5, 3);
   switch (B.floor) {
-    case 'panel': {
-      base(C.d, C.m, C.b); const H = S / 2;
-      for (const y of [0, H]) { bevel(P, 0, y, S, H, C, soft); for (const a of [3, S - 4]) { put(P, a, y + 3, C.h); put(P, a, y + H - 4, C.h); } }
-      if (v === 1) for (let k = 0; k < 4; k++) rect(P, H + 5, H + 5 + k * 3, H - 10, 1, C.o, k === 3 ? C.mix(C.g, [0, 0, 0], 0.5) : null);
-      if (v === 2) { glowLine([[0, 11], [12, 11], [12, 27], [S - 1, 27]]); glowLine([[27, 0], [27, 11], [20, 11]]); node(12, 11); node(27, 27); }
-      if (v === 3) { stripes(2, 2, S - 4, 4); stripes(2, S - 6, S - 4, 4); }
+    case 'flag': {
+      mortarFill(P, C.o); flagstones(P, C, n, r);
+      if (v === 2) { mossy(P, C, n, 0.5, r); cracks(P, C, r, 2); }
+      if (v === 3) grate(P, C, 13, 14, 14, 11, false);
+      else pebbles(P, C, r, 2 + Math.floor(r() * 3));
       break;
     }
-    case 'flag': case 'basalt': {
-      const lava = B.floor === 'basalt', vor = makeVoronoi(S, seed + v * 7, lava ? 5 : 5);
+    case 'slate': {
+      mortarFill(P, C.o); slabs(P, C, n, r, 2); mossy(P, C, n, 0.7, r, 0.05);
+      if (v === 2) { ring(P, 20, 20, 9, C.mix(C.f, C.d, 0.3), C.mix(C.f2, [0, 0, 0], 0.35), 6); for (let k = 0; k < 3; k++) { const a = k * 2.094; line(P, 20, 20, 20 + Math.cos(a) * 7, 20 + Math.sin(a) * 7, C.mix(C.f, C.d, 0.3), C.mix(C.f2, [0, 0, 0], 0.4)); } }
+      if (v === 3) cracks(P, C, r, 3, true);
+      break;
+    }
+    case 'iron': {
+      mortarFill(P, C.o);
+      const I = { ...C, d: [40, 40, 46], m: [74, 74, 82], b: [104, 102, 108], h: [146, 144, 150] };
+      slabs(P, I, n, r, 2);
+      for (const [x, y] of [[3, 3], [17, 3], [3, 17], [17, 17]]) for (const [ox, oy] of [[0, 0], [20, 0], [0, 20], [20, 20]]) { put(P, x + ox, y + oy, I.h); put(P, x + ox + 1, y + oy + 1, C.o); }
+      mossy(P, C, n, 0.62, r, 0.5); // rust blooms
+      if (v === 2) grate(P, C, 8, 12, 24, 16, true);
+      if (v === 3) puddle(P, 22, 22, 9, 6, [16, 14, 18], [44, 40, 52]);
+      break;
+    }
+    case 'basalt': {
+      const vor = makeVoronoi(S, seed + v * 7, 5);
       for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
         const i = y * S + x, e = vor.edge[i], k = vor.id[i] * 0.6 + n[i] * 0.5;
-        if (e < 1.1) { const hot = lava ? (n[i] > (v >= 2 ? 0.4 : 0.62)) : (v === 2 && n[i] > 0.5); put(P, x, y, hot ? C.mix(C.a, C.g, 0.5) : C.o, hot ? (e < 0.6 ? C.a : C.g) : null); }
-        else if (e < 2.1) put(P, x, y, C.h.map((q, j) => (q + C.m[j]) / 2));
+        if (e < 1.1) { const hot = n[i] > (v >= 2 ? 0.42 : 0.64); put(P, x, y, hot ? C.mix(C.f, C.f2, e) : C.o, hot ? (e < 0.6 ? C.f : C.f2) : null); }
+        else if (e < 2.1) put(P, x, y, C.mix(C.h, C.m, 0.5));
         else put(P, x, y, k > 0.62 ? C.b : k > 0.38 ? C.m : C.d);
       }
-      if (v === 3) { if (lava) { for (let y = 12; y < 28; y++) for (let x = 10; x < 30; x++) { const d = Math.hypot((x - 20) / 10, (y - 20) / 8); if (d < 1) put(P, x, y, d < 0.6 ? C.a : C.g, d < 0.6 ? C.a : C.g); } } else ring(P, 20, 20, 9, C.a, C.a, 8); }
+      if (v === 3) for (let y = 12; y < 28; y++) for (let x = 10; x < 30; x++) { const d = Math.hypot((x - 20) / 10, (y - 20) / 8); if (d < 1) put(P, x, y, d < 0.55 ? C.f0 : d < 0.8 ? C.f : C.f2, d < 0.55 ? C.f : C.f2); }
       break;
     }
-    case 'diamond': {
-      base(C.d, C.m, C.b); bevel(P, 0, 0, S, S, C, soft);
-      for (let y = 3; y < S - 2; y += 5) for (let x = 3 + (Math.floor(y / 5) % 2) * 2; x < S - 2; x += 5) { put(P, x, y, C.h); put(P, x + 1, y, C.b); put(P, x, y + 1, C.b); put(P, x + 1, y + 1, C.o); }
-      if (v === 2) { rect(P, 0, 18, S, 1, C.o); rect(P, 0, 21, S, 1, C.o); rect(P, 0, 19, S, 2, C.g, C.g); node(20, 19); }
-      if (v === 3) { stripes(1, 1, S - 2, 5); stripes(1, S - 6, S - 2, 5); }
+    case 'snow': {
+      for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) { const k = n[y * S + x] + (r() - 0.5) * 0.08; put(P, x, y, k < 0.38 ? C.b : k > 0.62 ? C.mix(C.h, [255, 255, 255], 0.5) : C.h); }
+      for (let x = 0; x < S; x++) if (r() < 0.7) put(P, x, 0, C.mix(C.b, C.h, 0.3));
+      for (let k = 0; k < 7; k++) put(P, r() * S, r() * S, [255, 255, 255], [70, 80, 90]);
+      if (v === 2) puddle(P, 20, 21, 12, 7, C.mix(C.g, C.b, 0.5), C.mix(C.g, [255, 255, 255], 0.5));
+      if (v === 3) cracks(P, { ...C, o: C.mix(C.g, C.d, 0.4) }, r, 3);
       break;
     }
-    case 'ice': {
-      base(C.m, C.b, C.h, 0.3, 0.6); bevel(P, 0, 0, S, S, { ...C, o: C.m, d: C.m });
-      for (let k = -S; k < S; k += 13) for (let t = 0; t < S; t++) if (hash() > 0.25) put(P, t, t + k, C.h);
-      let x = 4 + hash() * 30, y = 2; while (y < S - 2) { put(P, x, y, [240, 252, 255], v === 2 ? C.g : C.mix(C.g, [0, 0, 0], 0.75)); x += Math.round(hash() * 2 - 1); y++; }
-      if (v === 3) { ring(P, 20, 20, 8, C.a, C.a, 6); ring(P, 20, 20, 4, C.h, C.g); }
-      break;
-    }
-    case 'hive': {
-      base(C.d, C.m, C.b);
+    case 'moss': {
+      const vor = makeVoronoi(S, seed + v * 11, 8);
       for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
-        const row = Math.round(y / 8.66), cy = row * 8.66, cx = Math.round((x - (row % 2) * 5) / 10) * 10 + (row % 2) * 5;
-        const d2 = [[cx, cy], [cx - 10, cy], [cx + 10, cy], [cx - 5, cy - 8.66], [cx + 5, cy - 8.66], [cx - 5, cy + 8.66], [cx + 5, cy + 8.66]].map(([ax, ay]) => Math.hypot(x - ax, y - ay)).sort((a, b) => a - b);
-        if (d2[1] - d2[0] < 1.3) put(P, x, y, C.o); else if (d2[1] - d2[0] < 2.4) put(P, x, y, C.d); else if (d2[0] < 2.6) put(P, x, y, C.h);
+        const i = y * S + x, e = vor.edge[i], k = vor.id[i] * 0.5 + n[i] * 0.5;
+        if (e < 1.4) { put(P, x, y, n[i] > 0.45 ? (r() < 0.35 ? C.mix(C.mo, [255, 255, 255], 0.2) : C.mo) : C.mix(C.mo, C.o, 0.55)); P.mort[i] = 1; }
+        else put(P, x, y, e < 2.4 ? C.mix(C.b, C.h, 0.4) : k > 0.6 ? C.b : k > 0.35 ? C.m : C.mix(C.m, C.d, 0.5));
       }
-      if (v >= 2) for (const [x, y] of [[10, 9], [25, 26], [30, 9]].slice(0, v === 2 ? 2 : 3)) { rect(P, x - 2, y - 2, 5, 5, C.mix(C.g, C.o, 0.4), C.mix(C.g, [0, 0, 0], 0.4)); rect(P, x - 1, y - 1, 3, 3, C.g, C.g); put(P, x, y, C.a, C.a); }
+      if (v === 2) for (const [x, y] of [[9, 10], [27, 25], [30, 8]]) { rect(P, x - 1, y - 1, 3, 2, C.mix(C.f, C.o, 0.3), C.mix(C.f2, [0, 0, 0], 0.3)); put(P, x, y - 1, C.f0, C.f); }
+      if (v === 3) puddle(P, 20, 22, 11, 7, [34, 40, 22], [64, 76, 40]);
       break;
     }
-    case 'void': {
-      base(C.o, C.d, C.d, 0.45, 0.8);
-      for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) if (n[y * S + x] > 0.62) put(P, x, y, C.m, C.mix(C.g, [0, 0, 0], 0.72));
-      for (let k = 0; k < 6; k++) put(P, hash() * S, hash() * S, [255, 255, 255], [200, 200, 255]);
-      const edgeA = C.mix(C.a, C.d, 0.55), edgeE = C.mix(C.a, [0, 0, 0], 0.82);
-      for (let t = 0; t < S; t++) { put(P, t, 0, edgeA, edgeE); put(P, 0, t, edgeA, edgeE); }
-      if (v === 2) { ring(P, 20, 20, 10, C.g, C.g, 10); node(20, 20); }
-      if (v === 3) { line(P, 6, 34, 20, 6, C.a, C.a); line(P, 20, 6, 34, 34, C.a, C.a); line(P, 6, 34, 34, 34, C.a, C.a); }
+    case 'starstone': {
+      mortarFill(P, C.o); flagstones(P, C, n, r);
+      for (let k = 0; k < 5; k++) put(P, r() * S, r() * S, [255, 255, 255], [150, 140, 220]);
+      if (v === 2) { const pts = [[7, 8], [17, 14], [26, 9], [33, 22], [22, 31]]; for (let k = 0; k < pts.length - 1; k++) line(P, ...pts[k], ...pts[k + 1], C.mix(C.a, C.d, 0.5), C.mix(C.a, [0, 0, 0], 0.75)); for (const p of pts) put(P, ...p, [255, 255, 255], C.a); }
+      if (v === 3) cracks(P, C, r, 2, true);
       break;
     }
-    case 'marble': {
-      for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) { const vein = Math.abs(Math.sin((x + y) * 0.16 + n[y * S + x] * 7)); put(P, x, y, vein < 0.08 ? C.d : vein < 0.2 ? C.m : n[y * S + x] > 0.6 ? C.h : C.b); }
-      bevel(P, 0, 0, S, S, { ...C, h: [255, 248, 230] });
-      if (v === 2) { ring(P, 20, 20, 13, C.g, C.g); ring(P, 20, 20, 10, C.g, C.g, 12); line(P, 20, 20, 20, 11, C.a, C.a); line(P, 20, 20, 27, 22, C.a, C.a); }
-      if (v === 3) { rect(P, 2, 2, S - 4, 1, C.g, C.g); rect(P, 2, S - 3, S - 4, 1, C.g, C.g); for (let x = 6; x < S - 4; x += 8) rect(P, x, 4, 2, 2, C.g, C.g); }
+    case 'sand': {
+      mortarFill(P, C.mix(C.d, C.m, 0.5)); slabs(P, C, n, r, 2);
+      for (let k = 0; k < 2; k++) rect(P, 3 + k * 20, 3, 14, 1, C.mix(C.m, C.d, 0.3));
+      const sand = C.mix(C.h, [240, 210, 140], 0.35);
+      for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) if (noiseAt(n, S, x + 11, y) > 0.72) put(P, x, y, noiseAt(n, S, x + 11, y) > 0.8 ? C.h : sand);
+      if (v === 2) { ring(P, 20, 20, 10, C.mix(C.f, C.d, 0.25), C.mix(C.f2, [0, 0, 0], 0.55)); for (let k = 0; k < 8; k++) { const a = k * 0.785; line(P, 20 + Math.cos(a) * 5, 20 + Math.sin(a) * 5, 20 + Math.cos(a) * 8, 20 + Math.sin(a) * 8, C.mix(C.f, C.d, 0.3), C.mix(C.f2, [0, 0, 0], 0.6)); } }
+      if (v === 3) for (let y = 8; y < 34; y++) for (let x = 6; x < 34; x++) { const d = Math.hypot((x - 20) / 14, (y - 22) / 11); if (d < 1) put(P, x, y, d < 0.4 ? C.mix(sand, [255, 255, 255], 0.2) : d < 0.75 ? sand : C.h); }
       break;
     }
   }
   return P;
 }
+/* the face of a wall, seen at an angle from the south; mortar, then stones, then a contact shadow at the foot */
 function paintWallSide(bk, seed) {
   const S = TEXELS_PER_TILE, H = Math.round(S * 1.1), P = pxCanvas(S, H), C = pal(bk), B = BIOMES[bk], r = mulberry(seed), n = makeNoise(S, seed + 3, 3);
-  const panels = B.wall === 'tech' || B.wall === 'plating';
-  for (let y = 0; y < H; y++) for (let x = 0; x < S; x++) { const k = n[(y % S) * S + x] + (r() - 0.5) * 0.1; put(P, x, y, k < 0.3 ? C.m : k > 0.7 ? C.h : C.b); }
-  if (panels) {
-    for (const x0 of [0, S / 2]) bevel(P, x0, 3, S / 2, H - 6, C);
-    if (B.wall === 'tech') { rect(P, 4, 12, S - 8, 2, C.g, C.g); rect(P, 4, 11, S - 8, 1, C.o); rect(P, 4, 14, S - 8, 1, C.o); for (let k = 0; k < 4; k++) rect(P, 6, 22 + k * 4, 8, 2, C.o); put(P, S - 7, 26, C.a, C.a); put(P, S - 7, 29, C.g, C.g); }
-    else { for (let y = H - 9; y < H - 3; y++) for (let x = 0; x < S; x++) put(P, x, y, Math.floor((x + y) / 3) % 2 ? C.a : C.o); for (let x = 4; x < S; x += 9) { put(P, x, 7, C.h); put(P, x, H - 12, C.h); } rect(P, S / 2 - 1, 10, 2, 16, C.g, C.g); }
-  } else {
-    const rows = 4, bh = Math.floor((H - 4) / rows);
-    for (let row = 0; row < rows; row++) {
-      const y0 = 2 + row * bh, bw = B.wall === 'marble' ? S / 2 : S / 3, off = row % 2 ? bw / 2 : 0;
-      for (let x0 = -off; x0 < S; x0 += bw) {
-        const xa = Math.max(0, Math.round(x0)), xb = Math.min(S, Math.round(x0 + bw));
-        for (let x = xa; x < xb; x++) { put(P, x, y0, B.wall === 'basalt' ? C.g : C.o, B.wall === 'basalt' ? C.g : null); put(P, x, y0 + 1, C.h); put(P, x, y0 + bh - 1, C.d); }
-        for (let y = y0; y < y0 + bh; y++) put(P, xa, y, B.wall === 'basalt' ? C.a : C.o, B.wall === 'basalt' && r() > 0.4 ? C.g : null);
-      }
-    }
-    if (B.wall === 'obsidian' || B.wall === 'resin' || B.wall === 'ice') for (let k = 0; k < (B.wall === 'resin' ? 5 : 2); k++) { const x = 3 + r() * (S - 6), y = 6 + r() * (H - 14); if (B.wall === 'resin') { rect(P, x - 1, y - 1, 3, 3, C.g, C.g); put(P, x, y, C.a, C.a); } else line(P, x, y, x + (r() - 0.5) * 8, y + 8, C.h, C.mix(C.g, [0, 0, 0], 0.3)); }
-    if (B.wall === 'voidstone') for (let k = 0; k < 7; k++) put(P, r() * S, r() * H, [255, 255, 255], [220, 220, 255]);
-    if (B.wall === 'marble') rect(P, 0, 4, S, 1, C.g, C.g);
-  }
-  for (let x = 0; x < S; x++) { put(P, x, 0, C.h); put(P, x, 1, C.b); put(P, x, H - 1, C.o); put(P, x, H - 2, C.o); }
-  return P;
-}
-/* mask bits mark open floor on a side: 1 north, 2 east, 4 south, 8 west */
-function paintWallTop(bk, mask, seed) {
-  const S = TEXELS_PER_TILE, P = pxCanvas(S), C = pal(bk), B = BIOMES[bk], r = mulberry(seed + mask), n = makeNoise(S, seed + 9, 3);
-  const inner = !mask;
-  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) { const k = n[y * S + x] + (r() - 0.5) * 0.14; put(P, x, y, k < 0.3 ? C.o : k > 0.7 ? C.m : C.d); }
-  if (inner) { bevel(P, 0, 0, S, S, C, C.m); bevel(P, 6, 6, S - 12, S - 12, C, C.m); }
-  if (B.wall === 'tech' || B.wall === 'plating') { for (let k = 6; k < S; k += 11) { rect(P, k, 0, 1, S, C.o); rect(P, 0, k, S, 1, C.o); } }
-  const glow = C.g, trim = (side) => {
-    for (let t = 0; t < S; t++) {
-      const at = (d) => side === 1 ? [t, d] : side === 4 ? [t, S - 1 - d] : side === 8 ? [d, t] : [S - 1 - d, t];
-      put(P, ...at(0), C.h); put(P, ...at(1), C.b); put(P, ...at(2), C.m);
-      put(P, ...at(4), C.mix(glow, [255, 255, 255], 0.3), glow);
+  mortarFill(P, C.o);
+  const course = (y0, bh, bw, off, tone = 0) => { for (let x = -off; x < S; x += bw) stone(P, x + 1, y0 + 1, bw - 1, bh - 1, C, n, r, tone + (r() - 0.5) * 0.2); };
+  const vorWall = (cells, hotVeins) => {
+    const vor = makeVoronoi(H, seed + 17, cells);
+    for (let y = 3; y < H; y++) for (let x = 0; x < S; x++) {
+      const i = y * H + x, e = vor.edge[i], k = vor.id[i] * 0.6 + noiseAt(n, S, x, y) * 0.5;
+      if (e < 1.2) { const hot = hotVeins && noiseAt(n, S, x * 2, y) > 0.55; put(P, x, y, hot ? C.f : C.o, hot ? C.f2 : null); }
+      else { put(P, x, y, e < 2.3 ? C.mix(C.b, C.h, 0.4) : k > 0.62 ? C.b : k > 0.36 ? C.m : C.mix(C.m, C.d, 0.5)); P.mort[y * S + x] = 0; }
     }
   };
-  for (const side of [1, 2, 4, 8]) if (mask & side) trim(side);
+  switch (B.wall) {
+    case 'brick': for (let k = 0; k < 4; k++) course(3 + k * 10, 10, 13 + (k % 2), k % 2 ? 6 : 0, 0.05); mossy(P, C, n, 0.62, r, 0.04); break;
+    case 'forge': {
+      for (let k = 0; k < 4; k++) course(3 + k * 10, 10, 10, k % 2 ? 5 : 0, -0.12);
+      rect(P, 0, 19, S, 5, [52, 54, 62]); rect(P, 0, 19, S, 1, [118, 120, 130]); rect(P, 0, 23, S, 1, [24, 24, 30]);
+      for (let x = 3; x < S; x += 7) { put(P, x, 21, [150, 150, 160]); put(P, x + 1, 22, [20, 20, 26]); }
+      mossy(P, C, n, 0.66, r, 0.06); break;
+    }
+    case 'sandstone': {
+      for (let k = 0; k < 3; k++) course(3 + k * 13, 13, 20, k % 2 ? 10 : 0, 0.08);
+      rect(P, 0, 16, S, 3, C.mix(C.m, C.d, 0.4)); for (let x = 2; x < S; x += 6) { put(P, x, 17, C.f, C.mix(C.f2, [0, 0, 0], 0.55)); put(P, x + 2, 17, C.mix(C.m, C.d, 0.6)); }
+      break;
+    }
+    case 'iceblock': {
+      course(3, 20, 20, 0, 0.12); course(23, H - 23, 20, 10, 0.12);
+      for (let k = 0; k < 3; k++) { const x = r() * S; line(P, x, 6, x + 7, 18, C.mix(C.h, [255, 255, 255], 0.6)); }
+      for (let x = 1; x < S; x += 3) { const l = 2 + Math.floor(r() * 5); for (let y = 3; y < 3 + l; y++) put(P, x, y, y > 3 + l - 2 ? [255, 255, 255] : C.mix(C.h, [255, 255, 255], 0.5)); } // icicles under the lip
+      break;
+    }
+    case 'rough': vorWall(9, false); if (bk === 'astral_rift') for (let k = 0; k < 6; k++) put(P, r() * S, 4 + r() * (H - 6), [255, 255, 255], [190, 180, 255]); else mossy(P, C, n, 0.6, r, 0.05); break;
+    case 'basalt': vorWall(8, true); break;
+    case 'roots': {
+      for (let y = 3; y < H; y++) for (let x = 0; x < S; x++) { const k = noiseAt(n, S, x, y) + (r() - 0.5) * 0.12; put(P, x, y, k < 0.35 ? C.mix(C.d, C.o, 0.3) : k > 0.65 ? C.m : C.mix(C.d, C.m, 0.5)); }
+      for (let k = 0; k < 5; k++) { const x = r() * (S - 8), y = 5 + r() * (H - 14); stone(P, Math.round(x), Math.round(y), 5 + Math.floor(r() * 4), 4 + Math.floor(r() * 3), C, n, r, 0.1); }
+      for (let k = 0; k < 4; k++) { let x = r() * S; for (let y = 3; y < H - 3; y++) { put(P, x, y, [58, 38, 24]); put(P, x + 1, y, [92, 62, 38]); x += Math.sin(y * 0.4 + k * 2) * 0.6; } }
+      for (let k = 0; k < 3; k++) { const x = 4 + r() * (S - 8), y = 8 + r() * (H - 18); rect(P, x - 1, y - 1, 3, 3, C.mix(C.f, C.o, 0.3), C.mix(C.f2, [0, 0, 0], 0.25)); put(P, x, y, C.f0, C.f); }
+      mossy(P, C, n, 0.55, r, 0.08); break;
+    }
+  }
+  // moss / frost / ash gathers at the foot, which also falls into contact shadow
+  for (let y = H - 7; y < H; y++) for (let x = 0; x < S; x++) if (noiseAt(n, S, x * 3, y) > 0.48 - (y - (H - 7)) * 0.06 && r() < 0.7) put(P, x, y, r() < 0.4 ? C.mo : C.mix(C.mo, C.d, 0.4));
+  for (let k = 0; k < 5; k++) shadeRow(P, H - 1 - k, 0.5 + k * 0.1);
+  for (let x = 0; x < S; x++) { put(P, x, 0, C.h); put(P, x, 1, C.b); put(P, x, 2, C.o); }
+  return P;
+}
+/* the top of a wall: rough dark rock, with a lit stone lip and a hard outline on each side that faces
+   open floor (mask bits: 1 north, 2 east, 4 south, 8 west). Wall cells far from any floor are darkened
+   per instance, so the rock mass sinks into shadow away from the rooms. */
+function paintWallTop(bk, mask, seed, v = 0) {
+  const S = TEXELS_PER_TILE, P = pxCanvas(S), C = pal(bk), B = BIOMES[bk], r = mulberry(seed + mask * 13 + v * 101), n = makeNoise(S, seed + 9 + v * 3, 3), vor = makeVoronoi(S, seed + 21 + v * 7, 10);
+  const D = { o: C.o, d: C.mix(C.d, C.m, 0.25), m: C.mix(C.d, C.m, 0.6), b: C.m, h: C.mix(C.m, C.b, 0.45) };
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    const i = y * S + x, e = vor.edge[i], k = vor.id[i] * 0.55 + n[i] * 0.5;
+    // stones lit from the top-left: the rim pixel above/left of each crack catches light
+    const lit = vor.edge[((y + 1) % S) * S + x] < 1.2 || vor.edge[y * S + (x + 1) % S] < 1.2;
+    put(P, x, y, e < 1.2 ? D.o : lit ? D.d : k > 0.66 ? D.h : k > 0.38 ? D.b : D.m);
+  }
+  const dust = B.wall === 'iceblock' ? C.mix(C.h, [255, 255, 255], 0.4) : B.wall === 'basalt' ? C.mix(C.o, [60, 50, 48], 0.6) : C.mix(C.mo, C.d, 0.35);
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) if (vor.edge[y * S + x] >= 1.2 && noiseAt(n, S, x + 5, y + 9) > 0.68) put(P, x, y, dust);
+  const lip = side => {
+    for (let t = 0; t < S; t++) {
+      const at = d => side === 1 ? [t, d] : side === 4 ? [t, S - 1 - d] : side === 8 ? [d, t] : [S - 1 - d, t];
+      put(P, ...at(0), C.o); put(P, ...at(1), C.h); put(P, ...at(2), C.b); put(P, ...at(3), C.mix(C.b, C.m, 0.5)); put(P, ...at(4), C.m); put(P, ...at(5), D.o);
+    }
+  };
+  for (const side of [1, 2, 4, 8]) if (mask & side) lip(side);
   return P;
 }
 /* Brushed / scratched metal for fauna and props */
@@ -374,10 +456,10 @@ function biomeMaps(bk) {
   }
   return TEX.biome[bk];
 }
-function wallTopMaps(bk, mask) {
-  const T = biomeMaps(bk);
-  if (!T.top[mask]) { const P = paintWallTop(bk, mask, T.seed); T.top[mask] = { map: pxTex(P, 'alb', true), emissiveMap: pxTex(P, 'emi', true) }; }
-  return T.top[mask];
+function wallTopMaps(bk, mask, v = 0) {
+  const T = biomeMaps(bk), k = mask + '.' + v;
+  if (!T.top[k]) { const P = paintWallTop(bk, mask, T.seed, v); T.top[k] = { map: pxTex(P, 'alb', true), emissiveMap: pxTex(P, 'emi', true) }; }
+  return T.top[k];
 }
 function buildProceduralTextures() {
   TEX.metal = makeMetalMaps(77);
