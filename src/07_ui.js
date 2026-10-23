@@ -102,12 +102,12 @@ function setupHudForHero(h) {
 }
 function setSectorHud() {
   const sec = G.sector, B = BIOMES[sec.id];
-  document.documentElement.style.setProperty('--biome', B.glow);
+  document.documentElement.style.setProperty('--biome', B.flame[1]); // UI takes the sector's firelight colour
   hud.sectorName.textContent = `${String(G.floor).padStart(2, '0')} · ${sec.name}`; hud.sectorLock.textContent = `Lock ${sec.lock}`;
 }
 function showSectorCard(n) {
   const sec = SECTORS[n - 1], el = $('#sectorCard');
-  el.style.setProperty('--biome', BIOMES[sec.id].glow);
+  el.style.setProperty('--biome', BIOMES[sec.id].flame[1]);
   el.innerHTML = `<div class="k">Sector ${String(n).padStart(2, '0')} / ${FLOORS} · Lock ${sec.lock}</div><h3>${sec.name}</h3><p>${sec.sub}</p><div class="bar2"></div>`;
   el.classList.remove('on'); void el.offsetWidth; el.classList.add('on');
   if (G.p) setSectorHud();
@@ -117,7 +117,7 @@ function updateHud(dt) {
   hudT -= dt; if (hudT > 0) return; hudT = 0.05;
   const p = G.p;
   const hf = clamp(p.hp / p.maxHp, 0, 1);
-  hud.hpFill.style.clipPath = `inset(0 ${(100 - (4.5 + hf * 91)).toFixed(1)}% 0 0)`; hud.hpText.textContent = `${Math.ceil(p.hp)} / ${p.maxHp}`;
+  hud.hpFill.style.clipPath = `inset(0 ${(100 - (2.1 + hf * 95.8)).toFixed(1)}% 0 0)`; hud.hpText.textContent = `${Math.ceil(p.hp)} / ${p.maxHp}`;
   hud.hpFill.parentElement.classList.toggle('low', hf < 0.3);
   if (G.combo >= 3) { const t = '×' + G.combo; if (hud.combo.firstChild.textContent !== t) { hud.combo.firstChild.textContent = t; hud.combo.classList.remove('pop'); void hud.combo.offsetWidth; hud.combo.classList.add('pop'); } }
   hud.combo.classList.toggle('on', G.combo >= 3);
@@ -136,7 +136,7 @@ function updateHud(dt) {
   const b = []; if (p.buffs.power > 0) b.push(['Overclock', p.buffs.power, 0, 'ic_flame']); if (p.buffs.haste > 0) b.push(['Burst', p.buffs.haste, 0, 'ic_round']); if (p.buffs.citation > 0) b.push(['Cited', p.buffs.citation, 0, 'ic_lock']); if (p.buffs.homing > 0) b.push(['Lock-on', p.buffs.homing, 0, 'ic_ember']); if (G.shield) b.push(['Dome', G.shield.t, 0, 'ic_guard']); if (p.slowT > 0) b.push(['Slow pool', p.slowT, 1, 'ic_void']);
   const ST_ICON = { burn: 'ic_flame', poison: 'ic_toxin' };
   for (const k of ['slow', 'burn', 'poison', 'confuse', 'stun', 'timeslow', 'mark', 'fracture']) if (p.st8[k] > 0) b.push([STATUS[k].label, p.st8[k], 1, ST_ICON[k] || 'ic_void']);
-  hud.buffs.innerHTML = b.map(([n, t, bad, ic]) => `<span class="${bad ? 'bad' : ''}" title="${n}"><img src="atlas/props/${ic}.webp" alt="">${t.toFixed(1)}s</span>`).join('');
+  hud.buffs.innerHTML = b.map(([n, t, bad, ic]) => `<span class="${bad ? 'bad' : ''}" title="${n}"><img src="${iconURL(ic)}" alt="">${t.toFixed(1)}s</span>`).join('');
   if (p.hero.quota) hud.quota.innerHTML = `<b>Requests</b><span style="--q:${1 - p.shots / p.hero.quota}"></span>`;
   if (p.hero.id === 'glm') hud.modeTag.textContent = p.glm === 'zh' ? '中 · spread' : 'EN · pierce';
   // objective + chips
@@ -164,11 +164,11 @@ const mm = document.getElementById('minimap'), mmc = mm.getContext('2d');
 function drawMinimap() {
   const W = world.W, H = world.H, S = mm.width, p = G.p, R = 26, cell = S / (R * 2), ptx = p.x / TILE, ptz = p.z / TILE;
   const B = BIOMES[world.biome];
-  mmc.clearRect(0, 0, S, S); mmc.fillStyle = 'rgba(6,9,16,0.85)'; mmc.fillRect(0, 0, S, S);
+  mmc.clearRect(0, 0, S, S); mmc.fillStyle = 'rgba(23,18,15,0.9)'; mmc.fillRect(0, 0, S, S);
   for (let y = Math.floor(ptz - R); y < ptz + R; y++) for (let x = Math.floor(ptx - R); x < ptx + R; x++) {
     if (x < 0 || y < 0 || x >= W || y >= H) continue; const i = y * W + x; if (!world.explored[i]) continue;
     const g = world.grid[i];
-    if (g === T_FLOOR) mmc.fillStyle = 'rgba(140,165,215,0.34)'; else if (g === T_GATE) mmc.fillStyle = B.accent; else if (g === T_SEAL) mmc.fillStyle = 'rgba(255,209,102,.5)'; else continue;
+    if (g === T_FLOOR) mmc.fillStyle = 'rgba(214,190,150,0.42)'; else if (g === T_GATE) mmc.fillStyle = B.accent; else if (g === T_SEAL) mmc.fillStyle = 'rgba(255,209,102,.5)'; else continue;
     mmc.fillRect((x - ptx + R) * cell, (y - ptz + R) * cell, cell + 0.5, cell + 0.5);
   }
   const dot = (wx, wz, c, r, always) => { let x = wx / TILE - ptx + R, z = wz / TILE - ptz + R; if (!always && (x < 0 || z < 0 || x > R * 2 || z > R * 2)) return; x = clamp(x, 1.5, R * 2 - 1.5); z = clamp(z, 1.5, R * 2 - 1.5); mmc.fillStyle = c; mmc.beginPath(); mmc.arc(x * cell, z * cell, r, 0, 7); mmc.fill(); };
@@ -176,14 +176,14 @@ function drawMinimap() {
   for (const sw of world.switches) dot(sw.x, sw.z, sw.on ? '#3ff0a8' : B.accent, 3, true);
   for (const e of G.enemies) { if (!e.alive) continue; const ex = worldToTile(e.x), ez = worldToTile(e.z); if (!e.boss && !world.explored[ez * W + ex]) continue; dot(e.x, e.z, e.boss ? '#ff4f9a' : e.rival ? '#ffd166' : '#ff4a5a', e.boss ? 3.5 : e.rival ? 3 : 1.6, e.boss); }
   if (G.cache && world.sealOpen && !G.cache.claimed) dot(G.cache.x, G.cache.z, '#ffd166', 3, true);
-  if (G.portalOpen) dot(world.portal.x, world.portal.z, '#7dfcff', 4, true);
+  if (G.portalOpen) dot(world.portal.x, world.portal.z, '#f2cf6a', 4, true);
   else if (world.gateOpen && G.stage === 'gate') { const [vx, vz] = roomCenter(world.vault); dot(vx, vz, B.glow, 3.5, true); }
   mmc.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--hero') || '#fff';
   mmc.beginPath(); mmc.arc(R * cell, R * cell, 3.5, 0, 7); mmc.fill();
   const a = Math.atan2(p.aimZ, p.aimX); mmc.strokeStyle = mmc.fillStyle; mmc.beginPath(); mmc.moveTo(R * cell, R * cell); mmc.lineTo(R * cell + Math.cos(a) * 9, R * cell + Math.sin(a) * 9); mmc.stroke();
 }
 let toastT = null;
-function toast(html, icon = 'ic_lock') { const t = $('#toast'); t.innerHTML = `<img class="ti" src="atlas/props/${icon}.webp" alt="">` + html; t.classList.remove('on'); void t.offsetWidth; t.classList.add('on'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('on'), 1800); }
+function toast(html, icon = 'ic_lock') { const t = $('#toast'); t.innerHTML = `<img class="ti" src="${iconURL(icon)}" alt="">` + html; t.classList.remove('on'); void t.offsetWidth; t.classList.add('on'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('on'), 1800); }
 let bannerT = null;
 function showBanner(a, b) { const el = $('#banner'); el.innerHTML = `<h3>${a}</h3><p>${b}</p>`; el.classList.remove('on'); void el.offsetWidth; el.classList.add('on'); clearTimeout(bannerT); bannerT = setTimeout(() => el.classList.remove('on'), 2600); }
 
@@ -384,7 +384,7 @@ async function boot() {
   buildProceduralTextures(); buildMaterials(); initEnemyGeo(); initPropGeo(); initModelGeo(); initHud(); initFlashLights();
   try { await loadAtlases(f => { $('#loadFill').style.transform = `scaleX(${f})`; }); }
   catch (err) { $('#loadMsg').textContent = err.message + '. Reload the page to try again.'; return; }
-  await initPix(); resize();
+  await initPix(); pixUiKit(); resize();
   buildWorld(Math.floor(rand() * SECTORS.length));
   $('#lineup').innerHTML = ['caret', 'claude', 'snarkbit', 'devin', 'prismara', 'openclaw', 'lunaris', 'cursor', 'rendclaw'].map((id, i) => `<img src="${agentThumbURL(id)}" alt="" style="--i:${i}">`).join('');
   G.mode = 'title'; show('#title');

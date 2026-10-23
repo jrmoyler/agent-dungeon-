@@ -177,7 +177,7 @@ function decalRingMat(col, ticks = 12) {
         float ring=smoothstep(0.03,0.0,abs(r-0.92))+smoothstep(0.02,0.0,abs(r-0.7))*0.7+smoothstep(0.015,0.0,abs(r-0.45))*0.5;
         float tick=step(0.8,r)*step(r,0.9)*step(0.85,fract(a/6.2832*k*2.0+t*0.05));
         float rune=step(0.55,r)*step(r,0.66)*step(0.6,fract(a/6.2832*k*3.0-t*0.08))*0.6;
-        float v=(ring+tick+rune)*(0.55+0.3*sin(t*2.0)); gl_FragColor=vec4(c*1.3*v, v*0.7); }`,
+        float v=(ring+tick+rune)*(0.55+0.3*sin(t*2.0))*0.4; gl_FragColor=vec4(c*1.3*v, v*0.7); }`, // a faint carved summoning circle, not a neon sign
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
   });
 }
@@ -293,6 +293,12 @@ const PROP_KIT = {
   astral_rift:     { wall: ['crystal', 'statue', 'crystal', 'urn'], crates: 2, barrels: 1 },
   chrono_spire:    { wall: ['hourglass', 'shelf', 'statue', 'urn'], crates: 2, barrels: 1 },
 };
+/* soft contact shadow on the floor, so painted billboards stand on the tiles instead of floating */
+let shadowMat = null;
+function groundShadow(x, z, w, parent = world.group) {
+  shadowMat ||= new THREE.MeshBasicMaterial({ map: TEX.shadow, transparent: true, depthWrite: false, opacity: 0.8 });
+  const m = new THREE.Mesh(G3.plane, shadowMat); m.scale.set(w, 1, w * 0.5); m.position.set(x, 0.03, z); m.renderOrder = 1; parent.add(m); return m;
+}
 function propSprite(name, x, z, o = {}) {
   const T = PROPS[name], w = (o.w ?? T.ww ?? 1.5), h = w * T.h / T.w;
   const m = pixelSpriteMat(T.tex, { gain: o.gain ?? 1 }); m.alphaTest = 0.5; m.depthWrite = true; m.transparent = false;
@@ -302,9 +308,9 @@ function propSprite(name, x, z, o = {}) {
 /* crates and barrels: solid cover that breaks; barrels blow up */
 function addBreakable(name, tx, ty) {
   const x = (tx + 0.5) * TILE, z = (ty + 0.5) * TILE, explosive = name === 'keg';
-  const s = propSprite(name, x, z); world.group.add(s);
+  const s = propSprite(name, x, z); world.group.add(s); const sh = groundShadow(x, z + 0.1, s.scale.x * 1.15);
   const hp = (explosive ? 10 : 34) * (1 + (G.floor - 1) * 0.25);
-  const pr = { name, tx, ty, x, z, s, mat: s.material, hp, maxHp: hp, explosive, flash: 0, wob: 0, alive: true, fuse: -1 };
+  const pr = { name, tx, ty, x, z, s, sh, mat: s.material, hp, maxHp: hp, explosive, flash: 0, wob: 0, alive: true, fuse: -1 };
   world.props.push(pr); world.propAt.set(ty * world.W + tx, pr); world.grid[ty * world.W + tx] = T_WALL;
   return pr;
 }
@@ -317,7 +323,7 @@ function damageProp(pr, d, kx = 0, kz = 0) {
 }
 function propsNear(x, z, R) { return world.props.filter(pr => pr.alive && Math.hypot(pr.x - x, pr.z - z) < R + 0.9); }
 function breakProp(pr) {
-  if (!pr.alive) return; pr.alive = false; world.group.remove(pr.s); pr.mat.dispose();
+  if (!pr.alive) return; pr.alive = false; world.group.remove(pr.s, pr.sh); pr.mat.dispose();
   world.grid[pr.ty * world.W + pr.tx] = T_FLOOR; world.propAt.delete(pr.ty * world.W + pr.tx); G.flowDirty = true;
   const B = BIOMES[world.biome], acc = pr.explosive ? (world.biome === 'toxic_hive' ? 0x9bea52 : 0xff8a3a) : 0xc58a4c;
   debrisBurst(pr.x, pr.z, [0x43261a, 0x6b3f22, acc], pr.explosive ? 16 : 12);
@@ -475,7 +481,7 @@ function buildWorld(secIndex, seed = (Math.random() * 1e9) | 0) {
     d.grid[w.ty * d.W + w.tx] = T_WALL;
     if (w.dy !== -1) continue;
     const name = sheet.wall[Math.floor(R() * sheet.wall.length)];
-    grp.add(propSprite(name, (w.tx + 0.5) * TILE, (w.ty + 0.5 - 0.28) * TILE));
+    const ps = propSprite(name, (w.tx + 0.5) * TILE, (w.ty + 0.5 - 0.28) * TILE); grp.add(ps); groundShadow(ps.position.x, ps.position.z + 0.1, ps.scale.x * 1.1);
   }
   kit.wall.forEach((parts, k) => instanceParts(grp, parts, wallSpots.filter(w => w.kind === k && w.dy !== -1)));
   kit.feature.forEach((parts, k) => instanceParts(grp, parts, featureSpots.filter(w => w.kind === k)));
@@ -518,7 +524,7 @@ function buildWorld(secIndex, seed = (Math.random() * 1e9) | 0) {
     disk.position.copy(core.position); disk.rotation.x = -1.2; grp.add(core, disk); world.anim.push({ mesh: disk, kind: 'disk', t: 0 });
   }
   // vault arena decal
-  { const [vx, vz] = roomCenter(d.vault); const dec = new THREE.Mesh(G3.plane, decalRingMat(glow, 12)); dec.scale.setScalar(16); dec.position.set(vx, 0.05, vz); dec.renderOrder = 1; grp.add(dec); }
+  { const [vx, vz] = roomCenter(d.vault); const dec = new THREE.Mesh(G3.plane, decalRingMat(new THREE.Color(B.flame[1]), 12)); dec.scale.setScalar(16); dec.position.set(vx, 0.05, vz); dec.renderOrder = 1; grp.add(dec); }
 
   // braziers in room corners: stone pedestal, iron bowl, a Pixi flame card and a light
   world.pylons = []; world.lightSrc = []; const cards = [];

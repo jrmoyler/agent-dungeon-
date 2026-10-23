@@ -4,21 +4,22 @@
    controller, camera
 ------------------------------------------------------------------- */
 
-/* ---------- pickups & xp: icons from the props sheet ---------- */
+/* ---------- pickups & xp: painted pixel icons (02b_pixel.js) that cast a shadow on the floor ---------- */
 function iconSprite(name, w, glowCol) {
-  const m = pixelSpriteMat(PROPS[name].tex, { gain: 1.1 }); const s = new THREE.Sprite(m);
-  s.center.set(0.5, 0.5); s.scale.set(w, w * PROPS[name].h / PROPS[name].w, 1); s.renderOrder = 5; scene.add(s); return s;
+  const T = PROPS[name]; w = T.ww ?? w;
+  const m = pixelSpriteMat(T.tex, { gain: 1.05 }); const s = new THREE.Sprite(m);
+  s.center.set(0.5, 0.5); s.scale.set(w, w * T.h / T.w, 1); s.renderOrder = 5; scene.add(s); return s;
 }
 function spawnShard(x, z, val) {
   const m = iconSprite('ic_hex', 0.42); m.position.set(x, 0.4, z);
-  const a = rand() * 6.28; G.shards.push({ m, x, z, val, vx: Math.cos(a) * 3, vz: Math.sin(a) * 3, t: 0 });
+  const sh = groundShadow(x, z, 0.5, scene);
+  const a = rand() * 6.28; G.shards.push({ m, sh, x, z, val, vx: Math.cos(a) * 3, vz: Math.sin(a) * 3, t: 0 });
 }
 function spawnPickup(x, z) {
   const h = G.p.hero, k = Math.floor(rand() * 4), it = ITEM_KINDS[k];
   const g = iconSprite(it.icon, 0.85); g.position.set(x, 1, z);
-  const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: TEX.glow, depthTest: false, color: it.color, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.45 })); halo.scale.setScalar(1.8); scene.add(halo);
-  const ring = new THREE.Mesh(new THREE.RingGeometry(0.55, 0.7, 20), new THREE.MeshBasicMaterial({ color: it.color, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending, depthWrite: false }));
-  ring.rotation.x = -Math.PI / 2; ring.position.set(x, 0.05, z); scene.add(ring);
+  const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: TEX.glow, depthTest: false, color: it.color, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.22 })); halo.scale.setScalar(1.3); scene.add(halo);
+  const ring = groundShadow(x, z, 0.9, scene);
   const trap = h.trapChance && rand() < h.trapChance;
   G.pickups.push({ g, halo, ring, x, z, k, t: rand() * 6, trap, life: 25 });
 }
@@ -28,13 +29,13 @@ function updatePickups(dt) {
     s.t += dt; const dx = p.x - s.x, dz = p.z - s.z, d = Math.hypot(dx, dz) || 0.01;
     if (d < mag || s.t > 9) { const sp = 14 + s.t * 4; s.x += dx / d * sp * dt; s.z += dz / d * sp * dt; }
     else { s.vx *= Math.exp(-dt * 4); s.vz *= Math.exp(-dt * 4); s.x += s.vx * dt; s.z += s.vz * dt; }
-    s.m.position.set(s.x, 0.45 + Math.sin(s.t * 5) * 0.1, s.z);
-    if (d < 0.7) { s.dead = true; scene.remove(s.m); s.m.material.dispose(); gainXP(s.val); AUDIO.sfx.xp(); particles.emit(s.x, 0.6, s.z, 0x7fe8ff, 2, { speed: 1.5, life: 0.2, size: 0.16 }); }
+    s.m.position.set(s.x, 0.45 + Math.sin(s.t * 5) * 0.1, s.z); s.sh.position.set(s.x, 0.03, s.z);
+    if (d < 0.7) { s.dead = true; scene.remove(s.m, s.sh); s.m.material.dispose(); gainXP(s.val); AUDIO.sfx.xp(); particles.emit(s.x, 0.6, s.z, 0x7fe8ff, 2, { speed: 1.5, life: 0.2, size: 0.16 }); }
   }
   G.shards = G.shards.filter(s => !s.dead);
   for (const it of G.pickups) {
     it.t += dt; it.life -= dt;
-    it.g.position.set(it.x, 1 + Math.sin(it.t * 3) * 0.15, it.z); it.halo.position.copy(it.g.position); it.ring.scale.setScalar(1 + Math.sin(it.t * 4) * 0.1);
+    it.g.position.set(it.x, 1 + Math.sin(it.t * 3) * 0.15, it.z); it.halo.position.copy(it.g.position); const k = 1 - Math.sin(it.t * 3) * 0.12; it.ring.scale.set(0.9 * k, 1, 0.45 * k);
     it.g.visible = it.life < 4 ? Math.sin(it.t * 18) > 0 : true;
     const d = Math.hypot(p.x - it.x, p.z - it.z);
     if (d < 1.1 || it.life <= 0) {

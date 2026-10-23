@@ -239,23 +239,27 @@ function pixFlush() {
   PIX.liveTex.needsUpdate = true;
 }
 function pixClear() { if (PIX.ok) PIX.gfx.clear(); else PIX.ctx.clearRect(0, 0, LIVE_W, LIVE_H); }
-/* repaint the props for a biome into PROPS (crate, keg, chest, shelf...) and restart the live cells */
-function pixBiome(bk) {
-  const B = BIOMES[bk]; PIX.biome = bk;
-  pixClear(); const P = pixPen();
-  let x = 0, y = 0, rowH = 0; const at = {};
-  for (const [name, [w, h]] of Object.entries(PX_PROPS)) {
+/* paint a list of [name, w, h, painter] side by side on the Pixi canvas and cut each into its own 2D canvas */
+function pixSheet(items) {
+  pixClear(); const P = pixPen(), at = {};
+  let x = 0, y = 0, rowH = 0;
+  for (const [name, w, h, fn] of items) {
     if (x + w + 2 > LIVE_W) { x = 0; y += rowH + 2; rowH = 0; }
-    at[name] = [x + 1, y + 1, w, h]; paintProp({ rect: (px, py, pw, ph, c, a) => P.rect(px + x + 1, py + y + 1, pw, ph, c, a) }, name, B, w, h);
+    const ox = x + 1, oy = y + 1; at[name] = [ox, oy, w, h];
+    fn({ rect: (px, py, pw, ph, c, a) => { const x0 = Math.max(px, 0), y0 = Math.max(py, 0), x1 = Math.min(px + pw, w), y1 = Math.min(py + ph, h); if (x1 > x0 && y1 > y0) P.rect(x0 + ox, y0 + oy, x1 - x0, y1 - y0, c, a); } }, w, h);
     x += w + 3; rowH = Math.max(rowH, h + 1);
   }
   pixFlush();
-  for (const [name, [sx, sy, w, h]] of Object.entries(at)) {
-    const c = document.createElement('canvas'); c.width = w; c.height = h; c.getContext('2d').drawImage(PIX.canvas, sx, sy, w, h, 0, 0, w, h);
-    PROPS[name]?.tex.dispose();
-    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.magFilter = t.minFilter = THREE.NearestFilter; t.generateMipmaps = false;
-    PROPS[name] = { tex: t, w, h, url: null, ww: w / PROP_TEXELS };
-  }
+  const out = {};
+  for (const [name, [sx, sy, w, h]] of Object.entries(at)) { const c = document.createElement('canvas'); c.width = w; c.height = h; c.getContext('2d').drawImage(PIX.canvas, sx, sy, w, h, 0, 0, w, h); out[name] = c; }
+  return out;
+}
+function nearestTex(c) { const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.magFilter = t.minFilter = THREE.NearestFilter; t.generateMipmaps = false; return t; }
+/* repaint the props for a biome into PROPS (crate, keg, chest, shelf...) and restart the live cells */
+function pixBiome(bk) {
+  const B = BIOMES[bk]; PIX.biome = bk;
+  const cut = pixSheet(Object.entries(PX_PROPS).map(([name, [w, h]]) => [name, w, h, (P, w, h) => paintProp(P, name, B, w, h)]));
+  for (const [name, c] of Object.entries(cut)) { PROPS[name]?.tex.dispose(); PROPS[name] = { tex: nearestTex(c), w: c.width, h: c.height, url: null, ww: c.width / PROP_TEXELS }; }
   PIX.acc = 1; tickPix(0);
   PIX.weather?.setBiome(B);
 }
@@ -334,3 +338,70 @@ async function initWeather() {
   }
   return { setBiome, resize: resizeW, update, set visible(v) { cv.style.display = v ? '' : 'none'; } };
 }
+
+/* ---------- UI kit: HUD frames, sockets, health bar and icons, painted like the props ----------
+   Frames are 9-sliced by CSS (border-image, 8px slices drawn at 2x); sockets and the bar are drawn at
+   half their CSS size and blown up 2x with hard edges. Icons replace the sheet icons for pickups, XP
+   shards, buff chips and toasts, in the HUD and in the world. */
+const UI_ICON = {};
+const UI_INK = '#0d0a0c', STONE = ['#1a1714', '#36302a', '#5a524a', '#857a6c', '#b3a690'], GOLD = ['#5a3a10', '#b88a2e', '#f2cf6a', '#fff2b8'];
+function paintFrame(P, w, h, rim, field, o = {}) {
+  P.rect(0, 0, w, h, UI_INK);
+  P.rect(1, 1, w - 2, h - 2, rim[2]); P.rect(1, 1, w - 2, 1, rim[3]); P.rect(1, 1, 1, h - 2, rim[3]); P.rect(1, h - 2, w - 2, 1, rim[1]); P.rect(w - 2, 1, 1, h - 2, rim[1]);
+  if (o.grain) for (let x = 3; x < w - 3; x += 5) { P.rect(x, 2, 2, 1, rim[1]); P.rect(x + 2, h - 4, 2, 1, rim[3]); }
+  P.rect(3, 3, w - 6, h - 6, UI_INK);
+  P.rect(4, 4, w - 8, h - 8, field[0], o.alpha ?? 0.92); P.rect(4, 4, w - 8, 1, field[1], o.alpha ?? 0.92);
+  for (const [x, y] of [[2, 2], [w - 4, 2], [2, h - 4], [w - 4, h - 4]]) { P.rect(x, y, 2, 2, o.stud ?? GOLD[1]); P.rect(x, y, 1, 1, o.studHi ?? GOLD[3]); }
+}
+function paintSocket(P, w, h, rim, gem) {
+  P.rect(1, 0, w - 2, h, UI_INK); P.rect(0, 1, w, h - 2, UI_INK);
+  P.rect(1, 1, w - 2, h - 2, rim[2]); P.rect(1, 1, w - 2, 1, rim[3]); P.rect(1, 1, 1, h - 2, rim[3]); P.rect(1, h - 2, w - 2, 1, rim[1]); P.rect(w - 2, 1, 1, h - 2, rim[1]);
+  for (let x = 4; x < w - 4; x += 6) P.rect(x, h - 3, 3, 1, rim[1]);
+  P.rect(4, 4, w - 8, h - 8, UI_INK); P.rect(5, 5, w - 10, h - 10, '#120f0d'); P.rect(5, 5, w - 10, 1, '#221c17');
+  if (gem) { const cx = Math.floor(w / 2); P.rect(cx - 2, 0, 4, 3, UI_INK); P.rect(cx - 1, 0, 2, 2, gem); }
+}
+function paintBar(P, w, h) {
+  P.rect(0, 1, w, h - 2, UI_INK); P.rect(1, 0, w - 2, h, UI_INK);
+  P.rect(1, 1, w - 2, h - 2, STONE[2]); P.rect(1, 1, w - 2, 1, STONE[3]);
+  P.rect(2, 3, w - 4, h - 6, '#3a0a0c');
+  const fill = ['#6a1418', '#b0222a', '#e8434a', '#ff8a7a'];
+  P.rect(2, 3, w - 4, h - 6, fill[1]); P.rect(2, 3, w - 4, 2, fill[2]); P.rect(2, 4, w - 4, 1, fill[3]); P.rect(2, h - 5, w - 4, 2, fill[0]);
+  for (let x = 10; x < w - 4; x += 10) P.rect(x, 3, 1, h - 6, fill[0]);
+  P.rect(0, 0, 2, 2, GOLD[1]); P.rect(w - 2, 0, 2, 2, GOLD[1]); P.rect(0, h - 2, 2, 2, GOLD[1]); P.rect(w - 2, h - 2, 2, 2, GOLD[1]);
+}
+const ICONS = {
+  ic_heal: (P) => outlined(P, UI_INK, Q => { Q.rect(6, 1, 4, 2, WOOD[3]); Q.rect(6, 3, 4, 3, '#cfe8ee'); ell(Q, 8, 10, 5, 4, '#cfe8ee'); ell(Q, 8, 11, 4, 3, '#d8303a'); Q.rect(5, 8, 2, 2, '#ff8a8a'); Q.rect(4, 11, 8, 1, '#ff5a5a'); }),
+  ic_flame: (P) => paintFlame(P, 0, 0, 16, 16, ['#fff4c4', '#ffc04a', '#e4561f'].map(toNum), 0.35, 1.2),
+  ic_round: (P) => outlined(P, UI_INK, Q => { for (const [x, y, w] of [[9, 1, 3], [8, 3, 3], [7, 5, 3], [5, 7, 7], [8, 9, 3], [7, 11, 3], [6, 13, 2]]) Q.rect(x, y, w, 2, '#ffd45a'); Q.rect(9, 1, 1, 6, '#fff6c0'); }),
+  ic_orb: (P) => { outlined(P, UI_INK, Q => ell(Q, 8, 8, 6, 6, '#2a5ac8')); ell(P, 8, 8, 5, 5, '#3c7cf0'); ell(P, 7, 7, 3, 3, '#7cb8ff'); P.rect(5, 5, 2, 2, '#e8f4ff'); },
+  ic_hex: (P) => outlined(P, UI_INK, Q => { Q.rect(3, 1, 4, 1, '#bff6ff'); Q.rect(2, 2, 6, 2, '#6ad8f4'); Q.rect(1, 4, 8, 2, '#3aa8d8'); Q.rect(2, 6, 6, 1, '#2a80b8'); Q.rect(3, 7, 4, 1, '#2a80b8'); Q.rect(4, 8, 2, 1, '#1a5a90'); Q.rect(3, 2, 1, 3, '#ffffff'); }),
+  ic_lock: (P) => outlined(P, UI_INK, Q => { Q.rect(3, 2, 6, 2, GOLD[2]); Q.rect(2, 3, 2, 5, GOLD[2]); Q.rect(8, 3, 2, 5, GOLD[2]); Q.rect(3, 7, 6, 2, GOLD[2]); Q.rect(5, 4, 2, 3, UI_INK); Q.rect(6, 9, 2, 6, GOLD[1]); Q.rect(8, 12, 3, 1, GOLD[1]); Q.rect(8, 14, 2, 1, GOLD[1]); Q.rect(3, 2, 3, 1, GOLD[3]); }),
+  ic_ember: (P) => { outlined(P, UI_INK, Q => { ell(Q, 8, 8, 6, 6, '#c8302a'); }); ell(P, 8, 8, 4, 4, '#f4ead0'); ell(P, 8, 8, 2, 2, '#c8302a'); P.rect(8, 8, 1, 1, '#ffffff'); },
+  ic_guard: (P) => outlined(P, UI_INK, Q => { Q.rect(2, 2, 12, 7, STONE[3]); for (let y = 9; y < 15; y++) Q.rect(2 + (y - 8), y, 12 - (y - 8) * 2, 1, STONE[3]); Q.rect(7, 2, 2, 11, '#b0222a'); Q.rect(3, 5, 10, 2, '#b0222a'); Q.rect(2, 2, 12, 1, STONE[4]); }),
+  ic_void: (P) => outlined(P, UI_INK, Q => { ell(Q, 8, 7, 6, 5, '#e8dcc0'); Q.rect(5, 11, 6, 3, '#e8dcc0'); Q.rect(4, 6, 3, 3, '#3a1a5a'); Q.rect(9, 6, 3, 3, '#3a1a5a'); Q.rect(7, 10, 2, 1, '#3a1a5a'); Q.rect(6, 13, 1, 1, '#3a1a5a'); Q.rect(9, 13, 1, 1, '#3a1a5a'); }),
+  ic_toxin: (P) => { outlined(P, UI_INK, Q => { Q.rect(6, 1, 4, 3, '#cfe8ee'); ell(Q, 8, 10, 5, 5, '#cfe8ee'); }); ell(P, 8, 11, 4, 3, '#5ac83a'); P.rect(6, 9, 1, 1, '#d8ff8a'); P.rect(9, 11, 1, 1, '#d8ff8a'); P.rect(6, 1, 4, 1, WOOD[3]); },
+};
+const ICON_SIZE = { ic_hex: [10, 10] };
+function pixUiKit() {
+  const wood = [WOOD[0], WOOD[1], WOOD[2], WOOD[3]], field = ['#17120f', '#241c16'];
+  const cut = pixSheet([
+    ['panel', 32, 32, (P, w, h) => paintFrame(P, w, h, STONE.slice(1), field)],
+    ['banner', 32, 24, (P, w, h) => paintFrame(P, w, h, wood, field, { grain: true, stud: IRON[2], studHi: IRON[3] })],
+    ['frame', 24, 24, (P, w, h) => paintFrame(P, w, h, wood, field, { grain: true })],
+    ['frame_gold', 24, 24, (P, w, h) => paintFrame(P, w, h, GOLD, field, { stud: '#d8303a', studHi: '#ff9a9a' })],
+    ['slot_a', 31, 29, (P, w, h) => paintSocket(P, w, h, STONE.slice(1))],
+    ['slot_b', 31, 29, (P, w, h) => paintSocket(P, w, h, wood)],
+    ['slot_gold', 37, 34, (P, w, h) => paintSocket(P, w, h, GOLD, '#d8303a')],
+    ['portrait', 35, 32, (P, w, h) => paintSocket(P, w, h, GOLD, '#3c7cf0')],
+    ['bar', 96, 16, paintBar],
+    ...Object.entries(ICONS).map(([k, fn]) => [k, ...(ICON_SIZE[k] || [16, 16]), fn]),
+  ]);
+  const root = document.documentElement.style;
+  for (const [name, c] of Object.entries(cut)) {
+    const url = c.toDataURL('image/png');
+    if (name.startsWith('ic_')) { UI_ICON[name] = url; PROPS[name]?.tex.dispose(); PROPS[name] = { tex: nearestTex(c), w: c.width, h: c.height, url, ww: c.width / PROP_TEXELS }; }
+    else root.setProperty('--ui-' + name.replace('_', '-'), `url(${url})`);
+  }
+  document.querySelectorAll('img[data-icon]').forEach(i => { i.src = UI_ICON[i.dataset.icon]; });
+}
+const iconURL = k => UI_ICON[k] || `atlas/props/${k}.webp`;
