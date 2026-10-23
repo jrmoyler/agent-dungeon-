@@ -78,7 +78,7 @@ function drawPreview(dt) {
 /* ---------- HUD ---------- */
 const T_DASH = document.getElementById('tDash');
 const hud = {};
-function initHud() { ['hpFill', 'hpText', 'xpFill', 'lvl', 'floorTxt', 'killTxt', 'scoreTxt', 'buffs', 'portrait', 'heroName', 'objective', 'quota', 'modeTag', 'chips', 'bossbars', 'sectorName', 'sectorLock', 'prompt', 'abil'].forEach(k => hud[k] = document.getElementById(k)); }
+function initHud() { ['hpFill', 'hpText', 'xpFill', 'lvl', 'floorTxt', 'killTxt', 'scoreTxt', 'buffs', 'portrait', 'heroName', 'objective', 'quota', 'modeTag', 'chips', 'bossbars', 'sectorName', 'sectorLock', 'prompt', 'abil', 'combo'].forEach(k => hud[k] = document.getElementById(k)); }
 function setupHudForHero(h) {
   hud.portrait.src = agentThumbURL(h.id); hud.heroName.textContent = h.name;
   document.documentElement.style.setProperty('--hero', h.css);
@@ -116,7 +116,11 @@ let hudT = 0, bossKey = '';
 function updateHud(dt) {
   hudT -= dt; if (hudT > 0) return; hudT = 0.05;
   const p = G.p;
-  hud.hpFill.style.transform = `scaleX(${p.hp / p.maxHp})`; hud.hpText.textContent = `${Math.ceil(p.hp)} / ${p.maxHp}`;
+  const hf = clamp(p.hp / p.maxHp, 0, 1);
+  hud.hpFill.style.clipPath = `inset(0 ${(100 - (4.5 + hf * 91)).toFixed(1)}% 0 0)`; hud.hpText.textContent = `${Math.ceil(p.hp)} / ${p.maxHp}`;
+  hud.hpFill.parentElement.classList.toggle('low', hf < 0.3);
+  if (G.combo >= 3) { const t = '×' + G.combo; if (hud.combo.firstChild.textContent !== t) { hud.combo.firstChild.textContent = t; hud.combo.classList.remove('pop'); void hud.combo.offsetWidth; hud.combo.classList.add('pop'); } }
+  hud.combo.classList.toggle('on', G.combo >= 3);
   hud.xpFill.style.transform = `scaleX(${p.xp / p.xpNext})`; hud.lvl.textContent = p.level;
   hud.floorTxt.textContent = `${G.floor}/${FLOORS}`; hud.killTxt.textContent = G.kills; hud.scoreTxt.textContent = Math.round(G.score).toLocaleString();
   for (const k of MOVE_KEYS) {
@@ -129,9 +133,10 @@ function updateHud(dt) {
   hud.slots.dash.querySelector('.cd').style.setProperty('--p', clamp(p.dashCd / (p.dashMax || 1), 0, 1));
   document.querySelectorAll('#tMoves .tbtn').forEach(b => { const k = b.dataset.k, f = p.cds[k] > 0 ? p.cds[k] / p.cdMax[k] : 0; b.style.setProperty('--p', f); b.classList.toggle('ready', f === 0); });
   T_DASH.style.setProperty('--p', clamp(p.dashCd / (p.dashMax || 1), 0, 1));
-  const b = []; if (p.buffs.power > 0) b.push(['Overclock', p.buffs.power]); if (p.buffs.haste > 0) b.push(['Burst', p.buffs.haste]); if (p.buffs.citation > 0) b.push(['Cited', p.buffs.citation]); if (p.buffs.homing > 0) b.push(['Lock-on', p.buffs.homing]); if (G.shield) b.push(['Dome', G.shield.t]); if (p.slowT > 0) b.push(['Slow pool', p.slowT, 1]);
-  for (const k of ['slow', 'burn', 'poison', 'confuse', 'stun', 'timeslow', 'mark', 'fracture']) if (p.st8[k] > 0) b.push([STATUS[k].label, p.st8[k], 1]);
-  hud.buffs.innerHTML = b.map(([n, t, bad]) => `<span class="${bad ? 'bad' : ''}">${n} ${t.toFixed(1)}s</span>`).join('');
+  const b = []; if (p.buffs.power > 0) b.push(['Overclock', p.buffs.power, 0, 'ic_flame']); if (p.buffs.haste > 0) b.push(['Burst', p.buffs.haste, 0, 'ic_round']); if (p.buffs.citation > 0) b.push(['Cited', p.buffs.citation, 0, 'ic_lock']); if (p.buffs.homing > 0) b.push(['Lock-on', p.buffs.homing, 0, 'ic_ember']); if (G.shield) b.push(['Dome', G.shield.t, 0, 'ic_guard']); if (p.slowT > 0) b.push(['Slow pool', p.slowT, 1, 'ic_void']);
+  const ST_ICON = { burn: 'ic_flame', poison: 'ic_toxin' };
+  for (const k of ['slow', 'burn', 'poison', 'confuse', 'stun', 'timeslow', 'mark', 'fracture']) if (p.st8[k] > 0) b.push([STATUS[k].label, p.st8[k], 1, ST_ICON[k] || 'ic_void']);
+  hud.buffs.innerHTML = b.map(([n, t, bad, ic]) => `<span class="${bad ? 'bad' : ''}" title="${n}"><img src="atlas/props/${ic}.webp" alt="">${t.toFixed(1)}s</span>`).join('');
   if (p.hero.quota) hud.quota.innerHTML = `<b>Requests</b><span style="--q:${1 - p.shots / p.hero.quota}"></span>`;
   if (p.hero.id === 'glm') hud.modeTag.textContent = p.glm === 'zh' ? '中 · spread' : 'EN · pierce';
   // objective + chips
@@ -178,7 +183,7 @@ function drawMinimap() {
   const a = Math.atan2(p.aimZ, p.aimX); mmc.strokeStyle = mmc.fillStyle; mmc.beginPath(); mmc.moveTo(R * cell, R * cell); mmc.lineTo(R * cell + Math.cos(a) * 9, R * cell + Math.sin(a) * 9); mmc.stroke();
 }
 let toastT = null;
-function toast(html) { const t = $('#toast'); t.innerHTML = html; t.classList.remove('on'); void t.offsetWidth; t.classList.add('on'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('on'), 1800); }
+function toast(html, icon = 'ic_lock') { const t = $('#toast'); t.innerHTML = `<img class="ti" src="atlas/props/${icon}.webp" alt="">` + html; t.classList.remove('on'); void t.offsetWidth; t.classList.add('on'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('on'), 1800); }
 let bannerT = null;
 function showBanner(a, b) { const el = $('#banner'); el.innerHTML = `<h3>${a}</h3><p>${b}</p>`; el.classList.remove('on'); void el.offsetWidth; el.classList.add('on'); clearTimeout(bannerT); bannerT = setTimeout(() => el.classList.remove('on'), 2600); }
 
@@ -211,13 +216,17 @@ async function startRun() {
   try { await loadAgent(h.id); } catch (e) { $('#btnStart').textContent = 'Retry'; $('#btnStart').disabled = false; return; }
   $('#btnStart').disabled = false; $('#btnStart').textContent = 'Enter the dungeon';
   if (G.p) disposePlayer();
-  G.p = createPlayer(h); G.kills = 0; G.score = 0; G.dmgDealt = 0; G.runTime = 0; G.pendingLevels = 0; G.secretsFound = 0; G.runSeed = (Math.random() * 1e6) | 0;
+  G.p = createPlayer(h); G.combo = G.comboT = G.bestCombo = 0; G.kills = 0; G.score = 0; G.dmgDealt = 0; G.runTime = 0; G.pendingLevels = 0; G.secretsFound = 0; G.runSeed = (Math.random() * 1e6) | 0;
   input.autoFire = G.settings.autofire;
   setupHudForHero(h);
   startSector(1); G.mode = 'play'; show('#hud'); setSectorHud();
   fade();
 }
-function disposePlayer() { const p = G.p; p.sprite.dispose(); scene.remove(p.light); scene.remove(p.shadow); G.p = null; }
+function disposePlayer() {
+  const p = G.p; p.sprite.dispose(); scene.remove(p.light, p.shadow, p.sil, p.aim.ret, p.aim.chev); p.silMat.dispose();
+  for (const g of p.ghosts) { scene.remove(g.spr); g.mat.dispose(); g.tex.dispose(); }
+  G.p = null;
+}
 function nextFloor() {
   if (G.mode !== 'play') return;
   if (G.floor >= FLOORS) { endRun(true); return; }
@@ -239,7 +248,7 @@ function endRun(won) {
   $('#resSub').textContent = won ? `${h.name} cleared all ${FLOORS} sectors and every guardian.` : `${h.name} fell in ${G.sector.name} (sector ${G.floor}).`;
   const c = $('#resArt'), g = c.getContext('2d'), L = BATCH.layout, T = AGENT_TEX[h.id]; g.clearRect(0, 0, 168, 168);
   const idx = won ? L.sets.cast + 2 * 4 + 2 : L.react.hurt + 1; g.drawImage(T.bodyImg, (idx % L.cols) * L.cell, Math.floor(idx / L.cols) * L.cell, L.cell, L.cell, 0, 0, 168, 168);
-  $('#resStats').innerHTML = [['Sector', `${G.floor}/${FLOORS}`], ['Kills', G.kills], ['Damage', Math.round(G.dmgDealt).toLocaleString()], ['Level', G.p.level], ['Secrets', G.secretsFound], ['Time', `${m}:${String(s).padStart(2, '0')}`], ['Score', Math.round(G.score).toLocaleString() + (G.score > best ? ' · best' : '')]].map(([a, b]) => `<div><dt>${a}</dt><dd>${b}</dd></div>`).join('');
+  $('#resStats').innerHTML = [['Sector', `${G.floor}/${FLOORS}`], ['Kills', G.kills], ['Damage', Math.round(G.dmgDealt).toLocaleString()], ['Level', G.p.level], ['Secrets', G.secretsFound], ['Best chain', '×' + G.bestCombo], ['Time', `${m}:${String(s).padStart(2, '0')}`], ['Score', Math.round(G.score).toLocaleString() + (G.score > best ? ' · best' : '')]].map(([a, b]) => `<div><dt>${a}</dt><dd>${b}</dd></div>`).join('');
   show('#results');
 }
 function pause(on) {
@@ -268,7 +277,7 @@ window.addEventListener('keydown', e => {
   if (G.mode === 'select' && (e.code === 'ArrowRight' || e.code === 'ArrowLeft')) { const list = HEROES.filter(h => cohort === 'all' || h.cohort === cohort); const i = list.findIndex(h => h.id === selected); selected = list[(i + (e.code === 'ArrowRight' ? 1 : list.length - 1)) % list.length].id; renderDetail(); document.getElementById('hero-' + selected)?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }
 });
 window.addEventListener('keyup', e => { if (keymap[e.code]) input[keymap[e.code]] = 0; });
-canvas.addEventListener('mousemove', e => { input.mouseX = e.clientX / innerWidth * 2 - 1; input.mouseY = -(e.clientY / innerHeight) * 2 + 1; input.mouseIn = true; });
+canvas.addEventListener('mousemove', e => { input.cx = e.clientX; input.cy = e.clientY; input.mouseIn = true; });
 canvas.addEventListener('mousedown', e => { if (e.button === 0) input.fire = true; if (e.button === 2) input.moves.rapid_fire = true; if (e.button === 1) { input.moves.ultimate = true; e.preventDefault(); } });
 window.addEventListener('mouseup', e => { if (e.button === 0) input.fire = false; });
 canvas.addEventListener('contextmenu', e => e.preventDefault());
@@ -314,11 +323,11 @@ window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); instal
 $('#btnInstall').onclick = async () => { if (!installEvt) return; installEvt.prompt(); await installEvt.userChoice; installEvt = null; $('#btnInstall').hidden = true; };
 if ('serviceWorker' in navigator && location.protocol !== 'file:' && !navigator.webdriver) window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => { }));
 
-/* ---------- title backdrop: slowly orbit a generated sector ---------- */
+/* ---------- title backdrop: drift slowly across a generated sector ---------- */
 let titleAngle = 0;
 function titleCamera(dt) {
-  titleAngle += dt * 0.06; const r = world.rooms.find(r => r.zone === 'vault') || world.rooms[0]; const [cx, cz] = roomCenter(r);
-  camera.position.set(cx + Math.cos(titleAngle) * 20, 16, cz + Math.sin(titleAngle) * 20); camera.lookAt(cx, 0, cz);
+  titleAngle += dt * 0.05; const r = world.rooms.find(r => r.zone === 'vault') || world.rooms[0]; const [cx, cz] = roomCenter(r);
+  placeCamera(cx - 14 + Math.sin(titleAngle) * 16, cz + Math.sin(titleAngle * 0.7) * 6);
 }
 
 /* ---------- main loop ---------- */
@@ -327,6 +336,7 @@ function frame(now) {
   requestAnimationFrame(frame);
   let dt = Math.min(0.05, (now - lastT) / 1000); lastT = now;
   G.time += dt;
+  if (input.mouseIn) [input.mouseX, input.mouseY] = cssToNdc(input.cx, input.cy);
   if (G.mode === 'play' || G.mode === 'dying' || G.mode === 'transition') {
     let gdt = dt;
     if (G.hitstop > 0) { G.hitstop -= dt; gdt = dt * 0.15; }
@@ -336,6 +346,7 @@ function frame(now) {
       if (G.pendingLevels > 0 && G.mode === 'play') openLevelUp();
     } else if (G.p) { const [idx, flip, lift] = agentFrame(G.p, gdt); G.p.sprite.set(idx, flip); G.p.sprite.spr.position.set(G.p.x, lift, G.p.z); }
     updatePlayerProj(gdt); updateEnemyBullets(G.mode === 'play' ? gdt : 0); updateSummons(gdt); updateFxAll(gdt); updateRings(gdt); updateLines(gdt); updatePickups(gdt); updateCorpses(gdt);
+    updateSmears(gdt); updateFlashLights(gdt); updateProps(gdt); updateCombo(dt);
     particles.update(gdt); updateWorld(gdt, G.p.x, G.p.z, G.time); ambient(gdt, G.p.x, G.p.z); updateCamera(dt); updateFloatText(dt); updateHud(dt);
   } else if (G.mode === 'levelup' || G.mode === 'paused') {
     updateCamera(0); updateFloatText(0); SHARED_T.value = G.time;
@@ -344,7 +355,9 @@ function frame(now) {
     const [cx, cz] = roomCenter(world.rooms.find(r => r.zone === 'vault') || world.rooms[0]); ambient(dt, cx, cz, 1.6);
     drawPreview(dt);
   }
-  composer.render();
+  const pb = pixelBlit.material.uniforms.uHurt;
+  pb.value = G.p && (G.mode === 'play' || G.mode === 'dying') ? Math.max((G.hurtT || 0) / 0.22 * 0.35, G.p.hp / G.p.maxHp < 0.3 ? 0.1 + Math.sin(G.time * 5) * 0.06 : 0) : 0;
+  renderFrame(dt);
 }
 /* biome atmosphere: embers, snow, spores, stars... */
 function ambient(dt, x, z, k = 1) {
@@ -367,7 +380,7 @@ function ambient(dt, x, z, k = 1) {
 /* ---------- boot ---------- */
 async function boot() {
   show('#loading'); resize();
-  buildProceduralTextures(); buildMaterials(); initEnemyGeo(); initPropGeo(); initModelGeo(); initHud();
+  buildProceduralTextures(); buildMaterials(); initEnemyGeo(); initPropGeo(); initModelGeo(); initHud(); initFlashLights();
   try { await loadAtlases(f => { $('#loadFill').style.transform = `scaleX(${f})`; }); }
   catch (err) { $('#loadMsg').textContent = err.message + '. Reload the page to try again.'; return; }
   buildWorld(Math.floor(rand() * SECTORS.length));
@@ -382,4 +395,5 @@ window.__AD = { G, input, startRun, HEROES, world, BATCH: () => BATCH, get selec
   move: k => G.p && useMove(G.p, k), killAll: () => G.enemies.slice().forEach(e => { if (!e.boss && e.alive) killEnemy(e); }), next: () => nextFloor(),
   damageBoss: f => G.bosses.forEach(b => { if (b.alive) { b.invuln = 0; b.intro = 0; damageEnemy(b, b.maxHp * f, false); } }), toVault: () => { const [x, z] = roomCenter(world.vault); G.p.x = x - 6; G.p.z = z; },
   toPortal: () => { G.p.x = world.portal.x; G.p.z = world.portal.z; }, solve: () => { for (const s of world.puzzle.steps) interactSwitch(world.switches.find(w => w.id === s)); }, god: () => { G.p.maxHp = G.p.hp = 99999; }, sector: n => startSector(n), spawnBoss: (id, dx = 0, dz = -7) => { const b = spawnBoss(id, G.p.x + dx, G.p.z + dz, 0, 1); b.intro = 0; b.invuln = 0; b.hp = b.maxHp = 1e9; G.stage = 'boss'; return b.uid; }, spawnCPU: (t, dx, dz) => spawnEnemy(t, G.p.x + dx, G.p.z + dz).uid,
+  hitProp: pr => damageProp(pr, 999),
   clearBosses: () => { G.enemies.filter(e => e.boss).forEach(removeEnemyVisuals); G.enemies = G.enemies.filter(e => !e.boss); G.bosses = []; G.corpses.forEach(c => removeEnemyVisuals(c.e)); G.corpses = []; ringPool.forEach(r => { r.alive = false; r.m.visible = false; }); } };

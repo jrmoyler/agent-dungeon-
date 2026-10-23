@@ -1,6 +1,8 @@
 /* ------------------------------------------------------------------
-   ENGINE: renderer, post FX, biome-procedural PBR textures, pixel
-   sprite shader, atlas loading, GPU particles, procedural audio
+   ENGINE: 3D pixel-art renderer (low-res target, ortho camera snapped
+   to the pixel grid, depth outlines, posterize + ordered dither),
+   biome pixel tiles, sprite shader, atlas loading, GPU particles,
+   procedural audio
 ------------------------------------------------------------------- */
 const IS_TOUCH = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
 const canvas = document.getElementById('gl');
@@ -8,30 +10,103 @@ const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPrefer
 const DPR = Math.min(window.devicePixelRatio || 1, IS_TOUCH ? 1.5 : 2);
 renderer.setPixelRatio(DPR);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.15;
+renderer.toneMapping = THREE.NoToneMapping; // tone mapping happens in the pixel blit
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x04060b);
-scene.fog = new THREE.FogExp2(0x04060b, 0.026);
-const camera = new THREE.PerspectiveCamera(40, 1, 0.5, 140);
+scene.fog = new THREE.Fog(0x04060b, 60, 110);
 
-const composer = new EffectComposer(renderer);
-composer.addPass(new RenderPass(scene, camera));
-const bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.8, 0.55, 0.84);
-composer.addPass(bloom);
-composer.addPass(new OutputPass());
+/* The world is drawn at a low resolution and blown up with hard pixel edges, so walls, rigs,
+   particles and sprites all share one pixel grid. PPU is the art scale: low-res pixels per world
+   unit, chosen so a floor tile (2 units, 40 texels) maps texel-for-pixel. */
+const PPU = 20, TEXELS_PER_TILE = 40;
+const CAM_PITCH = THREE.MathUtils.degToRad(55), CAM_DIST = 40;
+const VIEW = { scale: 2, lw: 2, lh: 2, offX: 0, offY: 0, zoom: 1, cropX: 0, cropY: 0 };
+const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.5, 140);
+camera.aspect = 1;
+const SPRITE_TILT = { value: Math.tan(CAM_PITCH) };
+
+const sceneRT = new THREE.WebGLRenderTarget(2, 2, { type: THREE.HalfFloatType, depthTexture: new THREE.DepthTexture(2, 2) });
+sceneRT.texture.minFilter = sceneRT.texture.magFilter = THREE.NearestFilter;
+const bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.4, 0.3, 0.9);
+const pixelBlit = new FullScreenQuad(new THREE.ShaderMaterial({
+  uniforms: { tScene: { value: sceneRT.texture }, tDepth: { value: sceneRT.depthTexture }, uLow: { value: new THREE.Vector2(2, 2) }, uScale: { value: 2 }, uOff: { value: new THREE.Vector2() },
+    uLevels: { value: 18 }, uExposure: { value: 1.25 }, uEdge: { value: 0.0035 }, uHurt: { value: 0 } },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position.xy,0.0,1.0); }',
+  fragmentShader: `uniform sampler2D tScene; uniform sampler2D tDepth; uniform vec2 uLow; uniform float uScale; uniform vec2 uOff;
+    uniform float uLevels; uniform float uExposure; uniform float uEdge; uniform float uHurt;
+    vec3 RRTAndODTFit(vec3 v){ vec3 a=v*(v+0.0245786)-0.000090537; vec3 b=v*(0.983729*v+0.4329510)+0.238081; return a/b; }
+    vec3 aces(vec3 c){ const mat3 I=mat3(vec3(0.59719,0.07600,0.02840),vec3(0.35458,0.90834,0.13383),vec3(0.04823,0.01566,0.83777));
+      const mat3 O=mat3(vec3(1.60475,-0.10208,-0.00327),vec3(-0.53108,1.10813,-0.07276),vec3(-0.07367,-0.00605,1.07602));
+      c*=uExposure/0.6; c=I*c; c=RRTAndODTFit(c); c=O*c; return clamp(c,0.0,1.0); }
+    vec3 toSRGB(vec3 c){ return mix(c*12.92, 1.055*pow(c,vec3(1.0/2.4))-0.055, step(0.0031308,c)); }
+    float bayer2(vec2 a){ a=floor(a); return fract(dot(a,vec2(0.5,a.y*0.75))); }
+    float bayer4(vec2 a){ return bayer2(0.5*a)*0.25+bayer2(a); }
+    float D(vec2 c){ return texture2D(tDepth,(c+0.5)/uLow).r; }
+    void main(){
+      vec2 cell=floor(gl_FragCoord.xy/uScale+uOff);
+      vec3 c=texture2D(tScene,(cell+0.5)/uLow).rgb;
+      // depth outlines: a pixel sitting behind a nearer neighbour darkens, the near rim brightens
+      float d=D(cell), dU=D(cell+vec2(0,1)), dDn=D(cell-vec2(0,1)), dL=D(cell-vec2(1,0)), dR=D(cell+vec2(1,0));
+      float behind=max(max(d-dU,d-dDn),max(d-dL,d-dR));
+      float rim=dU-d;
+      if(d<1.0 && behind>uEdge) c*=0.28;
+      else if(rim>uEdge && d<1.0) c*=1.45;
+      c=toSRGB(aces(c));
+      c=mix(c,vec3(c.r*1.15+0.08,c.g*0.7,c.b*0.72),uHurt);
+      c=floor(c*uLevels+bayer4(cell))/uLevels;
+      gl_FragColor=vec4(c,1.0); }`,
+  depthTest: false, depthWrite: false,
+}));
 
 function resize() {
   const w = window.innerWidth, h = window.innerHeight;
   renderer.setSize(w, h, false);
-  composer.setSize(w, h);
-  bloom.resolution.set(w * DPR * 0.5, h * DPR * 0.5);
-  camera.aspect = w / h;
-  camera.fov = w < h ? 54 : 40; // keep a similar view width on portrait phones
-  camera.updateProjectionMatrix();
+  const W = Math.round(w * DPR), H = Math.round(h * DPR);
+  // integer upscale that lands the short side near 330-400 low-res pixels
+  const scale = Math.max(1, Math.round(Math.min(W, H) / (w < h ? 300 : 360)));
+  VIEW.scale = scale; VIEW.lw = Math.ceil(W / scale); VIEW.lh = Math.ceil(H / scale);
+  VIEW.cropX = (VIEW.lw * scale - W) / 2 / scale; VIEW.cropY = (VIEW.lh * scale - H) / 2 / scale;
+  sceneRT.setSize(VIEW.lw, VIEW.lh);
+  bloom.setSize(VIEW.lw, VIEW.lh);
+  const u = pixelBlit.material.uniforms; u.uLow.value.set(VIEW.lw, VIEW.lh); u.uScale.value = scale;
+  camera.aspect = VIEW.lw / VIEW.lh;
+  applyZoom(VIEW.zoom);
+}
+function applyZoom(z) {
+  VIEW.zoom = z; const hw = VIEW.lw / 2 / (PPU * z), hh = VIEW.lh / 2 / (PPU * z);
+  camera.left = -hw; camera.right = hw; camera.top = hh; camera.bottom = -hh; camera.updateProjectionMatrix();
 }
 window.addEventListener('resize', resize);
+/* Fixed-angle camera. The look-at point is snapped to whole low-res pixels on screen and the
+   leftover fraction is fed to the blit as a sub-pixel shift, so scrolling is smooth but the
+   world never crawls or shimmers. */
+const CAM_UP = new THREE.Vector3(0, Math.cos(CAM_PITCH), -Math.sin(CAM_PITCH));
+function placeCamera(tx, tz) {
+  const ppu = PPU * VIEW.zoom, sp = Math.sin(CAM_PITCH);
+  const sx = tx * ppu, sy = -tz * sp * ppu, rx = sx - Math.round(sx), ry = sy - Math.round(sy);
+  const cx = Math.round(sx) / ppu, cz = -Math.round(sy) / (sp * ppu);
+  camera.position.set(cx, CAM_DIST * Math.sin(CAM_PITCH), cz + CAM_DIST * Math.cos(CAM_PITCH));
+  camera.up.set(0, 1, 0); camera.lookAt(cx, 0, cz);
+  VIEW.offX = rx + VIEW.cropX; VIEW.offY = ry + VIEW.cropY;
+  pixelBlit.material.uniforms.uOff.value.set(VIEW.offX, VIEW.offY);
+}
+/* screen <-> NDC through the pixel blit (crop + sub-pixel shift) */
+function cssToNdc(cx, cy) {
+  const k = canvas.width / innerWidth, X = cx * k, Yb = canvas.height - cy * k;
+  return [(X / VIEW.scale + VIEW.offX) / VIEW.lw * 2 - 1, (Yb / VIEW.scale + VIEW.offY) / VIEW.lh * 2 - 1];
+}
+function ndcToCss(nx, ny) {
+  const k = canvas.width / innerWidth;
+  const X = ((nx + 1) / 2 * VIEW.lw - VIEW.offX) * VIEW.scale, Yb = ((ny + 1) / 2 * VIEW.lh - VIEW.offY) * VIEW.scale;
+  return [X / k, (canvas.height - Yb) / k];
+}
+function renderFrame(dt) {
+  particles.mat.uniforms.scale.value = PPU * VIEW.zoom;
+  renderer.setRenderTarget(sceneRT); renderer.clear(); renderer.render(scene, camera);
+  bloom.render(renderer, null, sceneRT, dt, false);
+  renderer.setRenderTarget(null); pixelBlit.render(renderer);
+}
 
 const hemi = new THREE.HemisphereLight(0x8a9cd0, 0x1a120e, 1.1);
 scene.add(hemi);
@@ -120,129 +195,151 @@ const BIOMES = {
   chrono_spire:    { floor:'marble',  wall:'marble',   base:'#8a7d68', dark:'#2c261e', glow:'#f0c77e', accent:'#b1f7f4', fog:0x100c08, fogD:0.024, hemi:[0xffe2b0, 0x1a140c], rough:0.32, metal:0.25, particle:'dust', light:0xffd27a },
 };
 
-function makeFloorMaps(bk, seed) {
-  const B = BIOMES[bk], S = 256;
-  const n = makeNoise(S, seed, 5), n2 = makeNoise(S, seed + 7, 3), r = mulberry(seed + 3);
-  const base = rgbOf(B.base), dark = rgbOf(B.dark), glow = rgbOf(B.glow), acc = rgbOf(B.accent);
-  const h = new Float32Array(S * S), alb = new Uint8Array(S * S * 4), rough = new Uint8Array(S * S * 4), emi = new Uint8Array(S * S * 4);
-  const vor = (B.floor === 'flag' || B.floor === 'basalt' || B.floor === 'hive') ? makeVoronoi(S, seed + 1, B.floor === 'flag' ? 16 : B.floor === 'basalt' ? 22 : 40) : null;
-  const slabT = [r(), r(), r(), r()];
-  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
-    const i = y * S + x, j = i * 4;
-    let hh = n[i] * 0.3, m = 0.5, e = 0, ec = glow, ro = B.rough;
-    const half = S / 2, lx = x % half, ly = y % half, edge2 = Math.min(lx, ly, half - 1 - lx, half - 1 - ly), slab = (x < half ? 0 : 1) + (y < half ? 0 : 2);
-    switch (B.floor) {
-      case 'panel': { // tech floor panels, rivets, cyan seam light + hazard tiles
-        const q = 64, px = x % q, py = y % q, ed = Math.min(px, py, q - 1 - px, q - 1 - py);
-        const bev = clamp(ed / 4, 0, 1); hh = bev * 0.6 + n[i] * 0.15;
-        m = 0.42 + n[i] * 0.3 + slabT[slab] * 0.1; m *= 0.6 + bev * 0.4;
-        const rv = [[6, 6], [q - 7, 6], [6, q - 7], [q - 7, q - 7]].some(([a, b]) => (px - a) ** 2 + (py - b) ** 2 < 5);
-        if (rv) { hh += 0.4; m = 0.85; }
-        if (ed < 1.5 && ((Math.floor(x / q) + Math.floor(y / q)) % 3 === 0)) e = 1;
-        const tile = Math.floor(x / q) * 5 + Math.floor(y / q) * 3;
-        if (tile % 7 === 2 && bev > 0.9) { const st = Math.floor((px + py) / 8) % 2; if (px < 10 || px > q - 11) { m = st ? 0.9 : 0.12; ec = acc; } }
-        if ((px - q / 2) ** 2 + (py - q / 2) ** 2 < 36 && tile % 5 === 1) { e = 0.7; }
-        break;
-      }
-      case 'flag': { // irregular void flagstones with glowing veins
-        const ed = vor.edge[i]; const bev = clamp(ed / 3.5, 0, 1); hh = bev * 0.65 + n[i] * 0.25;
-        m = (0.32 + vor.id[i] * 0.3 + n[i] * 0.3) * (0.55 + bev * 0.45);
-        if (ed < 1.2 && n2[i] > 0.5) e = 1; ro = 0.75;
-        break;
-      }
-      case 'diamond': { // diamond tread plate with hazard band and arc conduits
-        const q = 16, px = (x + (Math.floor(y / q) % 2) * 8) % q, py = y % q;
-        const dd = Math.abs(px - 8) + Math.abs(py - 8) * 0.45; const ridge = dd < 3.2 ? 1 : 0;
-        hh = ridge * 0.4 + clamp(edge2 / 5, 0, 1) * 0.5; m = 0.45 + ridge * 0.15 + n[i] * 0.25;
-        m *= 0.6 + clamp(edge2 / 5, 0, 1) * 0.4;
-        if (edge2 < 7 && slab === 3) { const st = Math.floor((x + y) / 10) % 2; m = st ? 0.95 : 0.1; ec = acc; }
-        if (Math.abs(lx - half / 2) < 1 && slab === 0) e = 0.9;
-        break;
-      }
-      case 'basalt': { // basalt plates split by molten cracks
-        const ed = vor.edge[i]; const bev = clamp(ed / 4, 0, 1); hh = bev * 0.7 + n[i] * 0.3;
-        m = (0.25 + vor.id[i] * 0.2 + n[i] * 0.35) * (0.4 + bev * 0.6);
-        if (ed < 2.2) { e = 1.2 * (1 - ed / 2.2); ec = ed < 0.9 ? acc : glow; }
-        ro = 0.9;
-        break;
-      }
-      case 'ice': { // clear ice slabs with frost fractures
-        const bev = clamp(edge2 / 6, 0, 1); hh = bev * 0.5 + n[i] * 0.25;
-        m = 0.65 + n[i] * 0.3 + slabT[slab] * 0.1;
-        const crack = Math.abs(Math.sin((x * 0.05 + n2[i] * 6) + slab)) < 0.04 || Math.abs(Math.sin(y * 0.043 + n[i] * 7)) < 0.03;
-        if (crack) { m = 1.1; hh -= 0.2; e = 0.4; }
-        ro = 0.12 + n2[i] * 0.2;
-        break;
-      }
-      case 'hive': { // honeycomb organics and slime nodules
-        const ed = vor.edge[i]; const cell = clamp(ed / 2.5, 0, 1); hh = cell * 0.5 + (1 - vor.f1[i] / 26) * 0.4;
-        m = (0.3 + n[i] * 0.4) * (0.45 + cell * 0.55);
-        if (vor.id[i] > 0.82 && vor.f1[i] < 9) { e = 1 - vor.f1[i] / 9; ec = vor.id[i] > 0.93 ? acc : glow; }
-        ro = 0.45;
-        break;
-      }
-      case 'void': { // star-flecked void tiles floating over a nebula
-        const bev = clamp(edge2 / 4, 0, 1); hh = bev * 0.6 + n[i] * 0.2;
-        m = (0.32 + n[i] * 0.3) * (0.5 + bev * 0.5);
-        const neb = smooth(0.55, 0.8, n2[i]); if (neb > 0) { e = neb * 0.45; }
-        if (r() > 0.996) { e = 1.4; ec = [255, 255, 255]; } else if (r() > 0.997) { e = 1.2; ec = acc; }
-        if (edge2 < 1.5) { e = Math.max(e, 0.5); ec = acc; }
-        break;
-      }
-      case 'marble': { // veined marble with gold clock inlays
-        const bev = clamp(edge2 / 5, 0, 1); hh = bev * 0.5 + n[i] * 0.15;
-        const vein = Math.abs(Math.sin((x + y) * 0.03 + n[i] * 9)); m = 0.7 + n2[i] * 0.2 - (vein < 0.08 ? 0.35 : 0);
-        m *= 0.7 + bev * 0.3;
-        const cx = lx - half / 2, cy = ly - half / 2, rad = Math.hypot(cx, cy), ang = Math.atan2(cy, cx);
-        if (Math.abs(rad - 40) < 1.4) { e = 1; ec = glow; m = 0.9; }
-        if (rad > 34 && rad < 44 && Math.abs(((ang / (Math.PI * 2) * 12) % 1 + 1) % 1 - 0.5) > 0.46) { e = 1; ec = glow; }
-        if (edge2 < 1.5) { e = 0.6; ec = glow; }
-        ro = 0.25 + n2[i] * 0.2;
-        break;
-      }
-    }
-    h[i] = hh;
-    const k = clamp(m, 0, 1.2);
-    for (let c = 0; c < 3; c++) alb[j + c] = clamp(lerp(dark[c], base[c] * 1.35, Math.min(1, k)) * (k > 1 ? k : 1), 0, 255);
-    alb[j + 3] = 255;
-    const rv = clamp(ro + n2[i] * 0.15, 0, 1) * 255; rough[j] = rough[j + 1] = rough[j + 2] = rv; rough[j + 3] = 255;
-    for (let c = 0; c < 3; c++) emi[j + c] = clamp(ec[c] * e, 0, 255); emi[j + 3] = 255;
-  }
-  return { map: dataTex(alb, S, true), normalMap: dataTex(heightToNormal(h, S, 6), S), roughnessMap: dataTex(rough, S), emissiveMap: dataTex(emi, S, true) };
+/* ---------- BIOME PIXEL TILES ----------
+   Floors are painted at 40x40 texels per tile so one texel lands on one low-res pixel. Each biome
+   gets four floor variants (plain, plain-alt, circuit/feature, accent), a wall face and a wall cap
+   whose neon trim is drawn only on the sides that border open floor, so the trim traces the maze. */
+function pal(bk) {
+  const B = BIOMES[bk], d = rgbOf(B.dark), b = rgbOf(B.base), g = rgbOf(B.glow), a = rgbOf(B.accent);
+  const mix = (x, y, t) => x.map((v, i) => clamp(v + (y[i] - v) * t, 0, 255));
+  return { o: mix(d, [0, 0, 0], 0.5), d, m: mix(d, b, 0.5), b, h: mix(b, [255, 255, 255], 0.25), g, a, mix };
 }
-function makeWallMaps(bk, seed) {
-  const B = BIOMES[bk], S = 256;
-  const n = makeNoise(S, seed, 5), n2 = makeNoise(S, seed + 5, 3), r = mulberry(seed + 11);
-  const base = rgbOf(B.base), dark = rgbOf(B.dark), glow = rgbOf(B.glow), acc = rgbOf(B.accent);
-  const h = new Float32Array(S * S), alb = new Uint8Array(S * S * 4), rough = new Uint8Array(S * S * 4), emi = new Uint8Array(S * S * 4);
-  const brickRand = []; for (let i = 0; i < 64; i++) brickRand.push(r());
-  const rows = { tech: 4, obsidian: 5, plating: 3, basalt: 6, ice: 4, resin: 5, voidstone: 5, marble: 3 }[B.wall];
-  const bh = S / rows, bw = S / (B.wall === 'plating' || B.wall === 'tech' ? 2 : 3);
-  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
-    const i = y * S + x, j = i * 4, row = Math.floor(y / bh);
-    const off = (B.wall === 'tech' || B.wall === 'plating') ? 0 : (row % 2) * bw / 2;
-    const bx = (x + off) % S, col = Math.floor(bx / bw), lx = bx % bw, ly = y % bh;
-    const edge = Math.min(lx, ly, bw - 1 - lx, bh - 1 - ly), br = brickRand[(row * 3 + col) % 64];
-    const mortar = edge < 2.2, chip = clamp(edge / 5, 0, 1);
-    let hh = mortar ? 0.05 : 0.45 + chip * 0.35 + n[i] * 0.3, m = mortar ? 0.12 : (0.35 + br * 0.3 + n[i] * 0.35) * (0.7 + chip * 0.3), e = 0, ec = glow, ro = B.rough + 0.15;
-    switch (B.wall) {
-      case 'tech': if (Math.abs(ly - bh * 0.5) < 2 && lx > 10 && lx < bw - 10 && br > 0.35) e = 1; if ([[8, 8], [bw - 9, 8], [8, bh - 9], [bw - 9, bh - 9]].some(([a, b]) => (lx - a) ** 2 + (ly - b) ** 2 < 6)) { hh += 0.3; m = 0.8; } break;
-      case 'obsidian': if (!mortar && Math.abs(Math.sin(x * 0.07 + n2[i] * 10)) < 0.05 && br > 0.4) e = 1; m *= 0.8; break;
-      case 'plating': if (y > S - 26) { const st = Math.floor((x + y) / 12) % 2; m = st ? 0.95 : 0.1; ec = acc; } if (ly > 4 && ly < 7) { hh -= 0.2; } if ((lx % 24) < 2 && Math.abs(ly - 5) < 2) { m = 0.9; hh += 0.3; } if (Math.abs(lx - bw / 2) < 1.2 && br > 0.6) e = 0.8; break;
-      case 'basalt': if (mortar) { e = 0.9 * (1 - edge / 2.2); ec = edge < 1 ? acc : glow; } break;
-      case 'ice': m = 0.6 + n[i] * 0.4 + (mortar ? -0.2 : 0); ro = 0.15; if (!mortar && Math.abs(Math.sin(y * 0.05 + n2[i] * 8)) < 0.03) { m = 1.05; e = 0.35; } break;
-      case 'resin': if (!mortar && n2[i] > 0.66) { e = (n2[i] - 0.66) * 2.4; } hh += n2[i] * 0.3; break;
-      case 'voidstone': if (r() > 0.995) { e = 1.3; ec = [255, 255, 255]; } if (mortar) { e = 0.45; ec = acc; } break;
-      case 'marble': { const vein = Math.abs(Math.sin((x - y) * 0.03 + n[i] * 9)); m = 0.75 + n2[i] * 0.15 - (vein < 0.07 ? 0.3 : 0); if (mortar) { e = 0.8; m = 0.6; } if (ly < 4) { e = 0.9; } ro = 0.28; break; }
+function pxCanvas(S, H = S) { return { S, H, alb: new Uint8Array(S * H * 4), emi: new Uint8Array(S * H * 4) }; }
+function put(P, x, y, c, e) {
+  x = Math.round(x); y = Math.round(y); if (x < 0 || y < 0 || x >= P.S || y >= P.H) return;
+  const i = (y * P.S + x) * 4; P.alb[i] = c[0]; P.alb[i + 1] = c[1]; P.alb[i + 2] = c[2]; P.alb[i + 3] = 255;
+  if (e) { P.emi[i] = e[0]; P.emi[i + 1] = e[1]; P.emi[i + 2] = e[2]; P.emi[i + 3] = 255; }
+}
+function rect(P, x0, y0, w, h, c, e) { for (let y = y0; y < y0 + h; y++) for (let x = x0; x < x0 + w; x++) put(P, x, y, c, e); }
+function bevel(P, x0, y0, w, h, C, hi = C.h) { // 1px seam on top/left, light lip, dark lip
+  for (let x = x0; x < x0 + w; x++) { put(P, x, y0, C.o); put(P, x, y0 + 1, hi); put(P, x, y0 + h - 1, C.d); }
+  for (let y = y0; y < y0 + h; y++) { put(P, x0, y, C.o); if (y > y0) put(P, x0 + 1, y, hi); put(P, x0 + w - 1, y, C.d); }
+}
+function line(P, x0, y0, x1, y1, c, e) { const n = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0)) || 1; for (let i = 0; i <= n; i++) put(P, x0 + (x1 - x0) * i / n, y0 + (y1 - y0) * i / n, c, e); }
+function ring(P, cx, cy, r, c, e, ticks = 0) { for (let k = 0; k < 160; k++) { const a = k / 160 * 6.283; if (ticks && Math.floor(k / 160 * ticks * 2) % 2) continue; put(P, cx + Math.cos(a) * r, cy + Math.sin(a) * r, c, e); } }
+/* data -> nearest-filtered texture; painter rows run top-down, texture rows bottom-up */
+function pxTex(P, which, srgb) {
+  const src = P[which], out = new Uint8Array(src.length), row = P.S * 4;
+  for (let y = 0; y < P.H; y++) out.set(src.subarray(y * row, (y + 1) * row), (P.H - 1 - y) * row);
+  if (which === 'emi') for (let i = 3; i < out.length; i += 4) out[i] = 255;
+  const t = new THREE.DataTexture(out, P.S, P.H, THREE.RGBAFormat);
+  t.magFilter = t.minFilter = THREE.NearestFilter; t.generateMipmaps = false;
+  if (srgb) t.colorSpace = THREE.SRGBColorSpace; t.needsUpdate = true; return t;
+}
+function paintFloor(bk, v, seed) {
+  // floors sit one step brighter than wall caps so the walkable space reads at a glance
+  const S = TEXELS_PER_TILE, P = pxCanvas(S), C0 = pal(bk), B = BIOMES[bk], r = mulberry(seed + v * 31);
+  const C = { ...C0, o: C0.d, d: C0.m, m: C0.mix(C0.m, C0.b, 0.6), b: C0.mix(C0.b, C0.h, 0.5) };
+  const n = makeNoise(S, seed + v, 3), hash = () => r(), soft = C.mix(C.m, C.h, 0.4);
+  const base = (lo, mid, hi, lt = 0.3, ht = 0.72) => { for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) { const k = n[y * S + x] + (hash() - 0.5) * 0.12; put(P, x, y, k < lt ? lo : k > ht ? hi : mid); } };
+  const glowLine = (pts, col = C.g) => { const e = C.mix(col, [0, 0, 0], 0.35); for (let i = 0; i < pts.length - 1; i++) line(P, ...pts[i], ...pts[i + 1], C.mix(col, C.d, 0.35), e); };
+  const node = (x, y, col = C.g) => { rect(P, x - 1, y - 1, 3, 3, C.o); put(P, x, y, [255, 255, 255], col); };
+  const stripes = (x0, y0, w, h) => { for (let y = y0; y < y0 + h; y++) for (let x = x0; x < x0 + w; x++) put(P, x, y, Math.floor((x + y) / 3) % 2 ? C.a : C.o, Math.floor((x + y) / 3) % 2 ? C.mix(C.a, [0, 0, 0], 0.7) : null); };
+  switch (B.floor) {
+    case 'panel': {
+      base(C.d, C.m, C.b); const H = S / 2;
+      for (const y of [0, H]) { bevel(P, 0, y, S, H, C, soft); for (const a of [3, S - 4]) { put(P, a, y + 3, C.h); put(P, a, y + H - 4, C.h); } }
+      if (v === 1) for (let k = 0; k < 4; k++) rect(P, H + 5, H + 5 + k * 3, H - 10, 1, C.o, k === 3 ? C.mix(C.g, [0, 0, 0], 0.5) : null);
+      if (v === 2) { glowLine([[0, 11], [12, 11], [12, 27], [S - 1, 27]]); glowLine([[27, 0], [27, 11], [20, 11]]); node(12, 11); node(27, 27); }
+      if (v === 3) { stripes(2, 2, S - 4, 4); stripes(2, S - 6, S - 4, 4); }
+      break;
     }
-    h[i] = hh;
-    const k = clamp(m, 0, 1.2);
-    for (let c = 0; c < 3; c++) alb[j + c] = clamp(lerp(dark[c], base[c], Math.min(1, k)) * (k > 1 ? k : 1), 0, 255);
-    alb[j + 3] = 255;
-    const rv = clamp(ro + n2[i] * 0.15, 0, 1) * 255; rough[j] = rough[j + 1] = rough[j + 2] = rv; rough[j + 3] = 255;
-    for (let c = 0; c < 3; c++) emi[j + c] = clamp(ec[c] * e, 0, 255); emi[j + 3] = 255;
+    case 'flag': case 'basalt': {
+      const lava = B.floor === 'basalt', vor = makeVoronoi(S, seed + v * 7, lava ? 5 : 5);
+      for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+        const i = y * S + x, e = vor.edge[i], k = vor.id[i] * 0.6 + n[i] * 0.5;
+        if (e < 1.1) { const hot = lava ? (n[i] > (v >= 2 ? 0.4 : 0.62)) : (v === 2 && n[i] > 0.5); put(P, x, y, hot ? C.mix(C.a, C.g, 0.5) : C.o, hot ? (e < 0.6 ? C.a : C.g) : null); }
+        else if (e < 2.1) put(P, x, y, C.h.map((q, j) => (q + C.m[j]) / 2));
+        else put(P, x, y, k > 0.62 ? C.b : k > 0.38 ? C.m : C.d);
+      }
+      if (v === 3) { if (lava) { for (let y = 12; y < 28; y++) for (let x = 10; x < 30; x++) { const d = Math.hypot((x - 20) / 10, (y - 20) / 8); if (d < 1) put(P, x, y, d < 0.6 ? C.a : C.g, d < 0.6 ? C.a : C.g); } } else ring(P, 20, 20, 9, C.a, C.a, 8); }
+      break;
+    }
+    case 'diamond': {
+      base(C.d, C.m, C.b); bevel(P, 0, 0, S, S, C, soft);
+      for (let y = 3; y < S - 2; y += 5) for (let x = 3 + (Math.floor(y / 5) % 2) * 2; x < S - 2; x += 5) { put(P, x, y, C.h); put(P, x + 1, y, C.b); put(P, x, y + 1, C.b); put(P, x + 1, y + 1, C.o); }
+      if (v === 2) { rect(P, 0, 18, S, 1, C.o); rect(P, 0, 21, S, 1, C.o); rect(P, 0, 19, S, 2, C.g, C.g); node(20, 19); }
+      if (v === 3) { stripes(1, 1, S - 2, 5); stripes(1, S - 6, S - 2, 5); }
+      break;
+    }
+    case 'ice': {
+      base(C.m, C.b, C.h, 0.3, 0.6); bevel(P, 0, 0, S, S, { ...C, o: C.m, d: C.m });
+      for (let k = -S; k < S; k += 13) for (let t = 0; t < S; t++) if (hash() > 0.25) put(P, t, t + k, C.h);
+      let x = 4 + hash() * 30, y = 2; while (y < S - 2) { put(P, x, y, [240, 252, 255], v === 2 ? C.g : C.mix(C.g, [0, 0, 0], 0.75)); x += Math.round(hash() * 2 - 1); y++; }
+      if (v === 3) { ring(P, 20, 20, 8, C.a, C.a, 6); ring(P, 20, 20, 4, C.h, C.g); }
+      break;
+    }
+    case 'hive': {
+      base(C.d, C.m, C.b);
+      for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+        const row = Math.round(y / 8.66), cy = row * 8.66, cx = Math.round((x - (row % 2) * 5) / 10) * 10 + (row % 2) * 5;
+        const d2 = [[cx, cy], [cx - 10, cy], [cx + 10, cy], [cx - 5, cy - 8.66], [cx + 5, cy - 8.66], [cx - 5, cy + 8.66], [cx + 5, cy + 8.66]].map(([ax, ay]) => Math.hypot(x - ax, y - ay)).sort((a, b) => a - b);
+        if (d2[1] - d2[0] < 1.3) put(P, x, y, C.o); else if (d2[1] - d2[0] < 2.4) put(P, x, y, C.d); else if (d2[0] < 2.6) put(P, x, y, C.h);
+      }
+      if (v >= 2) for (const [x, y] of [[10, 9], [25, 26], [30, 9]].slice(0, v === 2 ? 2 : 3)) { rect(P, x - 2, y - 2, 5, 5, C.mix(C.g, C.o, 0.4), C.mix(C.g, [0, 0, 0], 0.4)); rect(P, x - 1, y - 1, 3, 3, C.g, C.g); put(P, x, y, C.a, C.a); }
+      break;
+    }
+    case 'void': {
+      base(C.o, C.d, C.d, 0.45, 0.8);
+      for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) if (n[y * S + x] > 0.62) put(P, x, y, C.m, C.mix(C.g, [0, 0, 0], 0.72));
+      for (let k = 0; k < 6; k++) put(P, hash() * S, hash() * S, [255, 255, 255], [200, 200, 255]);
+      const edgeA = C.mix(C.a, C.d, 0.55), edgeE = C.mix(C.a, [0, 0, 0], 0.82);
+      for (let t = 0; t < S; t++) { put(P, t, 0, edgeA, edgeE); put(P, 0, t, edgeA, edgeE); }
+      if (v === 2) { ring(P, 20, 20, 10, C.g, C.g, 10); node(20, 20); }
+      if (v === 3) { line(P, 6, 34, 20, 6, C.a, C.a); line(P, 20, 6, 34, 34, C.a, C.a); line(P, 6, 34, 34, 34, C.a, C.a); }
+      break;
+    }
+    case 'marble': {
+      for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) { const vein = Math.abs(Math.sin((x + y) * 0.16 + n[y * S + x] * 7)); put(P, x, y, vein < 0.08 ? C.d : vein < 0.2 ? C.m : n[y * S + x] > 0.6 ? C.h : C.b); }
+      bevel(P, 0, 0, S, S, { ...C, h: [255, 248, 230] });
+      if (v === 2) { ring(P, 20, 20, 13, C.g, C.g); ring(P, 20, 20, 10, C.g, C.g, 12); line(P, 20, 20, 20, 11, C.a, C.a); line(P, 20, 20, 27, 22, C.a, C.a); }
+      if (v === 3) { rect(P, 2, 2, S - 4, 1, C.g, C.g); rect(P, 2, S - 3, S - 4, 1, C.g, C.g); for (let x = 6; x < S - 4; x += 8) rect(P, x, 4, 2, 2, C.g, C.g); }
+      break;
+    }
   }
-  return { map: dataTex(alb, S, true), normalMap: dataTex(heightToNormal(h, S, 5), S), roughnessMap: dataTex(rough, S), emissiveMap: dataTex(emi, S, true) };
+  return P;
+}
+function paintWallSide(bk, seed) {
+  const S = TEXELS_PER_TILE, H = Math.round(S * 1.1), P = pxCanvas(S, H), C = pal(bk), B = BIOMES[bk], r = mulberry(seed), n = makeNoise(S, seed + 3, 3);
+  const panels = B.wall === 'tech' || B.wall === 'plating';
+  for (let y = 0; y < H; y++) for (let x = 0; x < S; x++) { const k = n[(y % S) * S + x] + (r() - 0.5) * 0.1; put(P, x, y, k < 0.3 ? C.m : k > 0.7 ? C.h : C.b); }
+  if (panels) {
+    for (const x0 of [0, S / 2]) bevel(P, x0, 3, S / 2, H - 6, C);
+    if (B.wall === 'tech') { rect(P, 4, 12, S - 8, 2, C.g, C.g); rect(P, 4, 11, S - 8, 1, C.o); rect(P, 4, 14, S - 8, 1, C.o); for (let k = 0; k < 4; k++) rect(P, 6, 22 + k * 4, 8, 2, C.o); put(P, S - 7, 26, C.a, C.a); put(P, S - 7, 29, C.g, C.g); }
+    else { for (let y = H - 9; y < H - 3; y++) for (let x = 0; x < S; x++) put(P, x, y, Math.floor((x + y) / 3) % 2 ? C.a : C.o); for (let x = 4; x < S; x += 9) { put(P, x, 7, C.h); put(P, x, H - 12, C.h); } rect(P, S / 2 - 1, 10, 2, 16, C.g, C.g); }
+  } else {
+    const rows = 4, bh = Math.floor((H - 4) / rows);
+    for (let row = 0; row < rows; row++) {
+      const y0 = 2 + row * bh, bw = B.wall === 'marble' ? S / 2 : S / 3, off = row % 2 ? bw / 2 : 0;
+      for (let x0 = -off; x0 < S; x0 += bw) {
+        const xa = Math.max(0, Math.round(x0)), xb = Math.min(S, Math.round(x0 + bw));
+        for (let x = xa; x < xb; x++) { put(P, x, y0, B.wall === 'basalt' ? C.g : C.o, B.wall === 'basalt' ? C.g : null); put(P, x, y0 + 1, C.h); put(P, x, y0 + bh - 1, C.d); }
+        for (let y = y0; y < y0 + bh; y++) put(P, xa, y, B.wall === 'basalt' ? C.a : C.o, B.wall === 'basalt' && r() > 0.4 ? C.g : null);
+      }
+    }
+    if (B.wall === 'obsidian' || B.wall === 'resin' || B.wall === 'ice') for (let k = 0; k < (B.wall === 'resin' ? 5 : 2); k++) { const x = 3 + r() * (S - 6), y = 6 + r() * (H - 14); if (B.wall === 'resin') { rect(P, x - 1, y - 1, 3, 3, C.g, C.g); put(P, x, y, C.a, C.a); } else line(P, x, y, x + (r() - 0.5) * 8, y + 8, C.h, C.mix(C.g, [0, 0, 0], 0.3)); }
+    if (B.wall === 'voidstone') for (let k = 0; k < 7; k++) put(P, r() * S, r() * H, [255, 255, 255], [220, 220, 255]);
+    if (B.wall === 'marble') rect(P, 0, 4, S, 1, C.g, C.g);
+  }
+  for (let x = 0; x < S; x++) { put(P, x, 0, C.h); put(P, x, 1, C.b); put(P, x, H - 1, C.o); put(P, x, H - 2, C.o); }
+  return P;
+}
+/* mask bits mark open floor on a side: 1 north, 2 east, 4 south, 8 west */
+function paintWallTop(bk, mask, seed) {
+  const S = TEXELS_PER_TILE, P = pxCanvas(S), C = pal(bk), B = BIOMES[bk], r = mulberry(seed + mask), n = makeNoise(S, seed + 9, 3);
+  const inner = !mask;
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) { const k = n[y * S + x] + (r() - 0.5) * 0.14; put(P, x, y, k < 0.3 ? C.o : k > 0.7 ? C.m : C.d); }
+  if (inner) { bevel(P, 0, 0, S, S, C, C.m); bevel(P, 6, 6, S - 12, S - 12, C, C.m); }
+  if (B.wall === 'tech' || B.wall === 'plating') { for (let k = 6; k < S; k += 11) { rect(P, k, 0, 1, S, C.o); rect(P, 0, k, S, 1, C.o); } }
+  const glow = C.g, trim = (side) => {
+    for (let t = 0; t < S; t++) {
+      const at = (d) => side === 1 ? [t, d] : side === 4 ? [t, S - 1 - d] : side === 8 ? [d, t] : [S - 1 - d, t];
+      put(P, ...at(0), C.h); put(P, ...at(1), C.b); put(P, ...at(2), C.m);
+      put(P, ...at(4), C.mix(glow, [255, 255, 255], 0.3), glow);
+    }
+  };
+  for (const side of [1, 2, 4, 8]) if (mask & side) trim(side);
+  return P;
 }
 /* Brushed / scratched metal for fauna and props */
 function makeMetalMaps(seed) {
@@ -267,8 +364,20 @@ function radialTex(stops, size = 128) {
 }
 const TEX = { biome: {} };
 function biomeMaps(bk) {
-  if (!TEX.biome[bk]) { const seed = 1000 + Object.keys(BIOMES).indexOf(bk) * 97; TEX.biome[bk] = { floor: makeFloorMaps(bk, seed), wall: makeWallMaps(bk, seed + 50) }; }
+  if (!TEX.biome[bk]) {
+    const seed = 1000 + Object.keys(BIOMES).indexOf(bk) * 97, side = paintWallSide(bk, seed + 50);
+    TEX.biome[bk] = {
+      floor: [0, 1, 2, 3].map(v => { const P = paintFloor(bk, v, seed); return { map: pxTex(P, 'alb', true), emissiveMap: pxTex(P, 'emi', true) }; }),
+      side: { map: pxTex(side, 'alb', true), emissiveMap: pxTex(side, 'emi', true) },
+      top: {}, seed,
+    };
+  }
   return TEX.biome[bk];
+}
+function wallTopMaps(bk, mask) {
+  const T = biomeMaps(bk);
+  if (!T.top[mask]) { const P = paintWallTop(bk, mask, T.seed); T.top[mask] = { map: pxTex(P, 'alb', true), emissiveMap: pxTex(P, 'emi', true) }; }
+  return T.top[mask];
 }
 function buildProceduralTextures() {
   TEX.metal = makeMetalMaps(77);
@@ -277,12 +386,24 @@ function buildProceduralTextures() {
   TEX.ring = (() => { const s = 256, c = document.createElement('canvas'); c.width = c.height = s; const g = c.getContext('2d'); g.strokeStyle = '#fff'; g.lineWidth = 10; g.shadowColor = '#fff'; g.shadowBlur = 24; g.beginPath(); g.arc(s / 2, s / 2, s / 2 - 26, 0, Math.PI * 2); g.stroke(); const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t; })();
 }
 
-/* ---------- pixel sprite material: hit flash, tint, dissolve, outline glow ---------- */
+/* ---------- pixel sprite material: hit flash, tint, dissolve, outline glow ----------
+   Sprites face the camera, but their depth is rewritten as if they stood upright at their anchor
+   ("vertical cards"): a tall sprite next to a wall no longer sinks into it, and two sprites sort by
+   where their feet are. A negative x scale mirrors the sprite. */
+function tiltSpriteShader(sh) {
+  sh.uniforms.uTilt = SPRITE_TILT;
+  sh.vertexShader = sh.vertexShader
+    .replace('#include <common>', '#include <common>\nuniform float uTilt;')
+    .replace('vec2 alignedPosition = ( position.xy - ( center - vec2( 0.5 ) ) ) * scale;',
+      'vec2 alignedPosition = ( position.xy - ( center - vec2( 0.5 ) ) ) * scale;\n\talignedPosition.x *= modelMatrix[ 0 ].x < 0.0 ? -1.0 : 1.0;')
+    .replace('mvPosition.xy += rotatedPosition;', 'mvPosition.xy += rotatedPosition;\n\tmvPosition.z += rotatedPosition.y * uTilt;');
+}
+function tiltSprite(m) { m.onBeforeCompile = tiltSpriteShader; m.customProgramCacheKey = () => 'tiltSprite'; return m; }
 function pixelSpriteMat(tex, o = {}) {
   const m = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, alphaTest: 0.04, fog: true, toneMapped: false, color: o.color ?? 0xffffff, opacity: o.opacity ?? 1 });
   m.userData.u = { uFlash: { value: 0 }, uFlashCol: { value: new THREE.Color(1, 1, 1) }, uDissolve: { value: 0 }, uDissolveCol: { value: new THREE.Color(o.dissolveCol ?? 0xffffff) }, uGain: { value: o.gain ?? 0.94 } };
   m.onBeforeCompile = sh => {
-    Object.assign(sh.uniforms, m.userData.u);
+    Object.assign(sh.uniforms, m.userData.u); if (o.tilt !== false) tiltSpriteShader(sh);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', '#include <common>\nuniform float uFlash; uniform vec3 uFlashCol; uniform float uDissolve; uniform vec3 uDissolveCol; uniform float uGain;')
       .replace('#include <map_fragment>', `#include <map_fragment>
@@ -296,7 +417,7 @@ function pixelSpriteMat(tex, o = {}) {
         }
         #endif`);
   };
-  m.customProgramCacheKey = () => 'pixelSprite';
+  m.customProgramCacheKey = () => o.tilt === false ? 'pixelSpriteFlat' : 'pixelSprite';
   return m;
 }
 
@@ -306,6 +427,9 @@ let MANIFEST = null;   // legacy card rects
 let BATCH = null;      // atlas/batch.json
 const SHEETS = {};     // shared sprite sheets: roster thumbnails
 const AGENT_TEX = {};  // per-agent { body, fx } textures (lazy)
+/* props + pickup icons cut from the props/HUD sheet (tools/art/slice_sheet.py) */
+const PROP_NAMES = ['crate_tech', 'server', 'pad', 'terminal', 'tesla', 'ice_pillar', 'barrel', 'crystal', 'crate_hot', 'cache', 'ic_guard', 'ic_ember', 'ic_lock', 'ic_hex', 'ic_orb', 'ic_heal', 'ic_round', 'ic_flame', 'ic_toxin', 'ic_void'];
+const PROPS = {};      // name -> { tex, w, h, url }
 function loadImage(url) { return new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('Could not load ' + url)); i.src = url; }); }
 function sheetTex(img, pixel) {
   const t = new THREE.Texture(img); t.colorSpace = THREE.SRGBColorSpace; t.needsUpdate = true;
@@ -315,7 +439,7 @@ function sheetTex(img, pixel) {
 async function loadAtlases(onProgress) {
   const [man, batch] = await Promise.all([fetch('atlas/manifest.json').then(r => r.json()), fetch('atlas/batch.json').then(r => r.json())]);
   MANIFEST = man; BATCH = batch;
-  const ids = Object.keys(MANIFEST); const extra = ['thumbs']; let done = 0; const total = ids.length + extra.length;
+  const ids = Object.keys(MANIFEST); const extra = ['thumbs']; let done = 0; const total = ids.length + extra.length + PROP_NAMES.length;
   const tick = () => { done++; onProgress && onProgress(done / total); };
   await Promise.all([
     ...ids.map(async id => {
@@ -331,6 +455,11 @@ async function loadAtlases(onProgress) {
       tick();
     }),
     ...extra.map(async k => { const img = await loadImage('atlas/' + k + '.webp'); SHEETS[k] = { img, tex: sheetTex(img, k !== 'thumbs') }; tick(); }),
+    ...PROP_NAMES.map(async k => {
+      const url = 'atlas/props/' + k + '.webp', img = await loadImage(url), t = new THREE.Texture(img);
+      t.colorSpace = THREE.SRGBColorSpace; t.minFilter = THREE.LinearMipmapLinearFilter; t.magFilter = THREE.NearestFilter; t.needsUpdate = true;
+      PROPS[k] = { tex: t, w: img.width, h: img.height, url }; tick();
+    }),
   ]);
 }
 function artURL(id, name) { const a = ART[id][name]; if (!a.url) a.url = a.canvas.toDataURL('image/png'); return a.url; }
@@ -377,12 +506,13 @@ const particles = (() => {
   geo.setAttribute('size', new THREE.BufferAttribute(size, 1));
   geo.setAttribute('alpha', new THREE.BufferAttribute(alpha, 1));
   const mat = new THREE.ShaderMaterial({
-    uniforms: { scale: { value: 600 } },
+    uniforms: { scale: { value: PPU } },
+    // hard-edged pixel motes: size is in world units, scale is low-res pixels per unit
     vertexShader: `attribute float size; attribute float alpha; varying vec3 vC; varying float vA;
       uniform float scale; void main(){ vC=color; vA=alpha; vec4 mv=modelViewMatrix*vec4(position,1.0);
-      gl_PointSize=size*scale/-mv.z; gl_Position=projectionMatrix*mv; }`,
+      gl_PointSize=max(1.0,floor(size*scale*0.8+0.5)); gl_Position=projectionMatrix*mv; }`,
     fragmentShader: `varying vec3 vC; varying float vA; void main(){ vec2 d=gl_PointCoord-0.5; float r=length(d);
-      if(r>0.5) discard; float a=smoothstep(0.5,0.0,r); gl_FragColor=vec4(vC*(0.6+a*1.6), a*vA); }`,
+      if(r>0.5 || vA<0.04) discard; float core=step(r,0.22); gl_FragColor=vec4(vC*(1.0+core*1.4)*(0.55+vA*0.9), 1.0); }`,
     vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending
   });
   const pts = new THREE.Points(geo, mat); pts.frustumCulled = false; pts.renderOrder = 9; scene.add(pts);

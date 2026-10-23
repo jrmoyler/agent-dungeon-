@@ -9,7 +9,7 @@ const dmgScale = () => 1 + (G.floor - 1) * 0.12;
 
 /* ---------- enemy bullets ---------- */
 const EPOOL = [];
-const eBulletMat = c => new THREE.SpriteMaterial({ map: TEX.glow, color: c, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true });
+const eBulletMat = c => new THREE.SpriteMaterial({ map: TEX.glow, depthTest: false, color: c, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true });
 function fireEnemyBullet(x, z, ang, speed, dmg, color = 0xff3df0, size = 0.9, o = {}) {
   let b = EPOOL.find(b => !b.alive);
   if (!b) { const s = new THREE.Sprite(eBulletMat(color)); s.renderOrder = 7; scene.add(s); const core = new THREE.Sprite(eBulletMat(0xffffff)); core.scale.setScalar(0.38); s.add(core); b = { s, alive: false }; EPOOL.push(b); }
@@ -110,24 +110,38 @@ function spawnEnemy(type, x, z, group = 0) { return ENEMY_DEFS[type] ? spawnFaun
 function damageEnemy(e, d, crit, kx = 0, kz = 0, o = {}) {
   if (!e.alive || e.hidden || e.invuln > 0) return;
   if (e.def.frontal && (kx || kz)) { const fa = Math.atan2(G.p.z - e.z, G.p.x - e.x), ha = Math.atan2(-kz, -kx); let da = fa - ha; while (da > Math.PI) da -= 2 * Math.PI; while (da < -Math.PI) da += 2 * Math.PI; if (Math.abs(da) < 0.9 && e.state !== 'stagger') { d *= 0.35; if (!e._sh || e._sh < G.time) { e._sh = G.time + 0.2; particles.emit(e.x, 1.1, e.z, 0x9cdbfa, 5, { speed: 3, life: 0.2, size: 0.25 }); } } }
-  e.hp -= d; G.dmgDealt += d; e.flash = 0.09; alertGroup(e);
+  e.hp -= d; G.dmgDealt += d; alertGroup(e);
+  // under sustained fire a boss flickers instead of turning into a solid white blob
+  if (!e.boss) e.flash = 0.09; else if (G.time - (e.lastFlash || 0) > 0.14) { e.flash = 0.05; e.lastFlash = G.time; }
   if (!e.def.boss && !e.def.heavy) { const l = Math.hypot(kx, kz) || 1, kb = (o.knock ?? 3.5) * (e.def.elite ? 0.4 : 1); e.knock[0] += kx / l * kb; e.knock[1] += kz / l * kb; }
   floatText(e.x, e.z, Math.round(d) + (crit ? '!' : ''), crit ? 'crit' : '', e.def.boss ? 5.5 : 2.2);
-  particles.emit(e.x, 1, e.z, G.p.hero.color, crit ? 10 : 5, { speed: 4, life: 0.3, size: 0.22 });
+  e.hitP = 1;
+  // sparks spray along the hit direction; a white core sells the impact
+  const kl = Math.hypot(kx, kz) || 1, sdir = [kx / kl * 7, kz / kl * 7];
+  particles.emit(e.x, 1, e.z, G.p.hero.color, crit ? 9 : 5, { speed: 2.5, life: 0.25, size: 0.2, dir: sdir, grav: 4 });
+  particles.emit(e.x, 1.05, e.z, 0xffffff, crit ? 4 : 2, { speed: 1.5, life: 0.12, size: 0.18, dir: sdir, grav: 0 });
   AUDIO.sfx.hit();
   if (crit) G.hitstop = Math.max(G.hitstop, 0.035);
   if (e.boss) bossOnHit(e, d);
   if (e.hp <= 0) killEnemy(e);
 }
+/* hit reaction: rigs and fauna bulge and squat for a few frames */
+function hitSquash(e, dt) { e.hitP = Math.max(0, (e.hitP || 0) - dt * 7); const k = e.hitP * 0.18, b = e.sc || 1; e.root.scale.set(b * (1 + k), b * (1 - k * 0.8), b * (1 + k)); }
+function updateCombo(dt) { if (G.comboT > 0) { G.comboT -= dt; if (G.comboT <= 0) G.combo = 0; } G.hurtT = Math.max(0, (G.hurtT || 0) - dt); }
 function alertGroup(e) {
   if (e.aggro) return; e.aggro = true;
   if (e.group) for (const o of G.enemies) if (o.group === e.group && !o.aggro && !o.boss) { o.aggro = true; o.fireT = rr(0.4, 1.4); }
 }
 function killEnemy(e) {
-  e.alive = false; G.kills++; G.score += (e.def.score || 30) * (1 + G.floor * 0.2);
+  e.alive = false; G.kills++;
+  G.combo++; G.comboT = 2.6; G.bestCombo = Math.max(G.bestCombo, G.combo);
+  G.score += (e.def.score || 30) * (1 + G.floor * 0.2) * (1 + Math.min(G.combo, 30) * 0.05);
   const c = e.color ?? (e.type === 'ghost' ? 0xb07aff : e.type === 'worm' ? 0x40ff9a : e.type === 'sentinel' ? 0xffb020 : e.type === 'spam' ? 0xffaa33 : 0xff3344);
   particles.emit(e.x, 0.9, e.z, c, e.boss ? 180 : 26, { speed: e.boss ? 14 : 7, life: e.boss ? 1.4 : 0.6, size: e.boss ? 0.5 : 0.3, up: 1.6 });
-  AUDIO.sfx.kill(); shakeAdd(e.boss ? 1.2 : 0.18);
+  AUDIO.sfx.kill(); shakeAdd(e.boss ? 1.2 : 0.22);
+  flashLight(e.x, 1.2, e.z, c, e.boss ? 120 : 26, e.boss ? 0.6 : 0.16, e.boss ? 18 : 8); shockRing(e.x, e.z, e.boss ? 7 : 1.6, c, e.boss ? 0.7 : 0.28);
+  debrisBurst(e.x, e.z, [c, 0x2a3350, 0xffffff], e.boss ? 30 : 8, e.boss ? 1.6 : 1);
+  if (!e.boss && (e.def.elite || G.combo % 10 === 0)) G.hitstop = Math.max(G.hitstop, 0.05);
   if (e.boss || e.rival) { AUDIO.sfx.boom(); G.hitstop = 0.25; }
   // dissolve out instead of popping
   G.corpses.push({ e, t: 0, dur: e.boss || e.rival ? 1.3 : 0.45 });
@@ -261,7 +275,7 @@ function hurtPlayer(raw) {
   if (G.shield) { particles.emit(p.x, 1, p.z, 0xffb050, 8, { speed: 3, life: 0.3 }); return; }
   let d = raw * (1 - p.st.def * (p.st8.fracture > 0 ? 0.5 : 1)) * (p.hero.takenMul || 1) * p.mods.armor;
   if (p.st8.mark > 0) d *= 1.25;
-  p.hp -= d; p.inv = 0.55; p.hurtFlash = 0.25; shakeAdd(0.35);
+  p.hp -= d; p.inv = 0.55; p.hurtFlash = 0.25; shakeAdd(0.4); p.sq = 0.16; G.hurtT = 0.22; G.hitstop = Math.max(G.hitstop, 0.04);
   floatText(p.x, p.z, '-' + Math.round(d), 'hurt', 2.8); AUDIO.sfx.hurt();
   particles.emit(p.x, 1, p.z, 0xff2244, 14, { speed: 5, life: 0.4 });
   if (!p.atk) setReact(p, 'hurt', 0.28);
@@ -441,7 +455,7 @@ function updateEnemies(dt) {
     if (Math.hypot(e.vx, e.vz) > 0.3) e.facing = Math.atan2(e.vx, e.vz);
     e.flash = Math.max(0, e.flash - dt);
     if (e.fam === 'fauna') {
-      e.root.position.set(e.x, 0, e.z);
+      e.root.position.set(e.x, 0, e.z); hitSquash(e, dt);
       e.root.rotation.y = lerpAngle(e.root.rotation.y, e.type === 'sentinel' ? 0 : e.facing, 1 - Math.exp(-dt * 12));
       animateFauna(e);
       for (const m of e.mats) m.emissiveIntensity = e.flash > 0 ? 6 : m.userData.baseEI * (e.confused > 0 ? 1.5 + Math.sin(G.time * 20) : 1) * (s.mark > 0 || e.reveal > 0 ? 1.4 : 1);
@@ -449,7 +463,7 @@ function updateEnemies(dt) {
       const tgYaw = Math.atan2(e.aggro ? dx : e.vx, e.aggro ? dz : e.vz);
       e.yaw = lerpAngle(e.yaw, tgYaw, 1 - Math.exp(-dt * 9));
       if (e.model.P.yawOnly) e.model.P.yawOnly.rotation.y = e.yaw; else e.model.yawNode.rotation.y = e.yaw;
-      e.root.position.set(e.x, 0, e.z);
+      e.root.position.set(e.x, 0, e.z); hitSquash(e, dt);
       e.atkT = Math.max(0, (e.atkT || 0) - dt);
       e.model.anim({ t: e.t, speed: Math.hypot(e.vx, e.vz), atk: e.atkT / 0.3, stagger: e.flash > 0, fuse: e.state === 'fuse' }, dt);
       const tint = e.confused > 0 ? 0xe28aff : s.slow > 0 ? 0x8fb0ff : s.mark > 0 ? 0xffe066 : s.bleed > 0 ? 0xff4a4a : null;
@@ -464,7 +478,7 @@ function updateEnemies(dt) {
 function spawnBoss(id, x, z, idx, count) {
   const meta = BATCH.bosses.find(b => b.id === id), col = hexInt(meta.color), acc = hexInt(meta.accent);
   const model = buildBossModel(id); model.root.position.set(x, 0, z); scene.add(model.root);
-  const light = new THREE.PointLight(acc, 16, 22, 1.4); scene.add(light);
+  const light = new THREE.PointLight(acc, 9, 22, 1.3); scene.add(light);
   const ring = new THREE.Mesh(G3.plane, decalRingMat(acc, 8)); ring.scale.setScalar(5); ring.renderOrder = 2; ring.visible = false; scene.add(ring);
   const hp = (900 + (G.floor - 1) * 260) * (count > 1 ? 0.72 : 1) * (1 + idx * 0.08);
   const e = baseEnemy({ fam: 'boss', boss: true, type: id, meta, def: { name: meta.name, boss: true, elite: true, xp: 60, score: 1500, speed: 2.4, heavy: true }, x, z, r: 2, hp, maxHp: hp, root: model.root, model, mats: model.mats, light, ring, extra: [light, ring],
@@ -544,8 +558,8 @@ function bossVisual(e, dt, dx, dz) {
   if (M.fx === 'void' && rand() < dt * 20) { const a = rand() * 6.28; particles.emit(e.x + Math.cos(a) * 5, 3.4, e.z + Math.sin(a) * 5, e.accent, 1, { speed: 0.2, life: 0.8, size: 0.3, grav: 0, dir: [-Math.cos(a) * 6, -Math.sin(a) * 6] }); }
   if (rand() < dt * 8) particles.emit(e.x + rr(-2, 2), rr(0.5, 4), e.z + rr(-1, 1), e.accent, 1, { speed: 0.6, life: 1, size: 0.3, grav: -1, lift: 0.6 });
   e.flash = Math.max(0, e.flash - dt);
-  if (e.flash > 0) flashModel(e.mats, 1); else if (e.invuln > 0 && e.intro <= 0) flashModel(e.mats, 0.35 + Math.sin(G.time * 30) * 0.25, e.accent); else if (e.anim === 'attack') flashModel(e.model.glows, 0.6 + Math.sin(k * Math.PI), e.accent); else flashModel(e.mats, 0);
-  e.light.position.set(e.x + 2.5, 6.5, e.z + 3); e.light.intensity = 16 + (e.anim === 'attack' ? 22 * Math.sin(k * Math.PI) : 0) + Math.sin(G.time * 4) * 2;
+  if (e.flash > 0) flashModel(e.mats, 0.45); else if (e.invuln > 0 && e.intro <= 0) flashModel(e.mats, 0.35 + Math.sin(G.time * 30) * 0.25, e.accent); else if (e.anim === 'attack') flashModel(e.model.glows, 0.6 + Math.sin(k * Math.PI), e.accent); else flashModel(e.mats, 0);
+  e.light.position.set(e.x + 2.5, 6.5, e.z + 3); e.light.intensity = 9 + (e.anim === 'attack' ? 14 * Math.sin(k * Math.PI) : 0) + Math.sin(G.time * 4) * 1.5;
   e.ring.position.set(e.x, 0.06, e.z); e.ring.scale.setScalar(4.6 + e.phase * 0.6);
   e.shadow.position.set(e.x, 0.03, e.z);
 }
@@ -556,7 +570,7 @@ async function spawnRival(cfg, x, z) {
   await loadAgent(h.id); if (G.mode === 'title' || G.mode === 'select') return null;
   const a = makeAgentSprite(h.id, SPR_SCALE * 1.45, { dissolveCol: cfg.tint });
   a.mat.color.setRGB(1, 0.78, 0.82);
-  const aura = new THREE.Sprite(new THREE.SpriteMaterial({ map: TEX.glow, color: cfg.tint, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.4 })); aura.scale.setScalar(5); scene.add(aura);
+  const aura = new THREE.Sprite(new THREE.SpriteMaterial({ map: TEX.glow, depthTest: false, color: cfg.tint, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.4 })); aura.scale.setScalar(5); scene.add(aura);
   const light = new THREE.PointLight(cfg.tint, 22, 14, 1.4); scene.add(light);
   const hp = 520 + G.floor * 110;
   const e = baseEnemy({ fam: 'rival', rival: true, type: 'rival', hero: h, cfg, agent: a, def: { name: cfg.name, elite: true, xp: 30, score: 900, speed: 4 }, x, z, r: 0.75, hp, maxHp: hp, name: `${cfg.name}`, sub: `Corrupted ${h.name} · ${cfg.sub}`, color: cfg.tint,
