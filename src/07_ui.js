@@ -357,11 +357,12 @@ function frame(now) {
   }
   const pb = pixelBlit.material.uniforms.uHurt;
   pb.value = G.p && (G.mode === 'play' || G.mode === 'dying') ? Math.max((G.hurtT || 0) / 0.22 * 0.35, G.p.hp / G.p.maxHp < 0.3 ? 0.1 + Math.sin(G.time * 5) * 0.06 : 0) : 0;
+  tickPix(dt); PIX.weather?.update(dt, G.time);
   renderFrame(dt);
 }
 /* biome atmosphere: embers, snow, spores, stars... */
 function ambient(dt, x, z, k = 1) {
-  const B = BIOMES[world.biome]; if (!B) return; const n = dt * 26 * k;
+  const B = BIOMES[world.biome]; if (!B) return; const n = dt * 14 * k; // the Pixi weather layer carries the foreground
   for (let i = 0; i < n; i++) {
     const px = x + rr(-16, 16), pz = z + rr(-12, 12);
     switch (B.particle) {
@@ -383,6 +384,7 @@ async function boot() {
   buildProceduralTextures(); buildMaterials(); initEnemyGeo(); initPropGeo(); initModelGeo(); initHud(); initFlashLights();
   try { await loadAtlases(f => { $('#loadFill').style.transform = `scaleX(${f})`; }); }
   catch (err) { $('#loadMsg').textContent = err.message + '. Reload the page to try again.'; return; }
+  await initPix(); resize();
   buildWorld(Math.floor(rand() * SECTORS.length));
   $('#lineup').innerHTML = ['caret', 'claude', 'snarkbit', 'devin', 'prismara', 'openclaw', 'lunaris', 'cursor', 'rendclaw'].map((id, i) => `<img src="${agentThumbURL(id)}" alt="" style="--i:${i}">`).join('');
   G.mode = 'title'; show('#title');
@@ -396,4 +398,5 @@ window.__AD = { G, input, startRun, HEROES, world, BATCH: () => BATCH, get selec
   damageBoss: f => G.bosses.forEach(b => { if (b.alive) { b.invuln = 0; b.intro = 0; damageEnemy(b, b.maxHp * f, false); } }), toVault: () => { const [x, z] = roomCenter(world.vault); G.p.x = x - 6; G.p.z = z; },
   toPortal: () => { G.p.x = world.portal.x; G.p.z = world.portal.z; }, solve: () => { for (const s of world.puzzle.steps) interactSwitch(world.switches.find(w => w.id === s)); }, god: () => { G.p.maxHp = G.p.hp = 99999; }, sector: n => startSector(n), spawnBoss: (id, dx = 0, dz = -7) => { const b = spawnBoss(id, G.p.x + dx, G.p.z + dz, 0, 1); b.intro = 0; b.invuln = 0; b.hp = b.maxHp = 1e9; G.stage = 'boss'; return b.uid; }, spawnCPU: (t, dx, dz) => spawnEnemy(t, G.p.x + dx, G.p.z + dz).uid,
   hitProp: pr => damageProp(pr, 999),
+  PIX,
   clearBosses: () => { G.enemies.filter(e => e.boss).forEach(removeEnemyVisuals); G.enemies = G.enemies.filter(e => !e.boss); G.bosses = []; G.corpses.forEach(c => removeEnemyVisuals(c.e)); G.corpses = []; ringPool.forEach(r => { r.alive = false; r.m.visible = false; }); } };

@@ -67,7 +67,7 @@ function gainXP(v) {
 function buildCache() {
   G.cache = null; if (!world.secret) return;
   const r = world.secret.room, [x, z] = roomCenter(r), col = new THREE.Color(BIOMES[world.biome].accent);
-  const g = new THREE.Group(), spr = propSprite('cache', 0, 0); g.add(spr);
+  const g = new THREE.Group(), spr = propSprite('chest', 0, 0); g.add(spr);
   const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: TEX.glow, depthTest: false, color: col, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.6 })); halo.scale.setScalar(4); halo.position.set(0, 1, 0); g.add(halo);
   g.add(padDecal(0, 0, 3)); g.position.set(x, 0, z); g.visible = false; scene.add(g);
   G.cache = { g, spr, halo, x, z, t: 0, claimed: false };

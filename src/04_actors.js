@@ -3,7 +3,7 @@
    atlas-driven FX, projectiles, statuses, summons
 ------------------------------------------------------------------- */
 const G = {
-  mode: 'title', hero: null, p: null, floor: 1, time: 0, enemies: [], corpses: [], runSeed: 0, sector: null, summons: [], fx: [], pickups: [], shards: [], lines: [], delayed: [], telegraphs: [], hazards: [],
+  mode: 'loading', hero: null, p: null, floor: 1, time: 0, enemies: [], corpses: [], runSeed: 0, sector: null, summons: [], fx: [], pickups: [], shards: [], lines: [], delayed: [], telegraphs: [], hazards: [],
   kills: 0, score: 0, dmgDealt: 0, runTime: 0, hitstop: 0, shake: 0, flow: null, flowTile: -1, portalOpen: false, paused: false, bosses: [], rival: null,
   stage: 'wings', secretsFound: 0, settings: { shake: true, autofire: false }, smears: [], kick: { x: 0, z: 0 }, combo: 0, comboT: 0, bestCombo: 0,
 };

@@ -2,7 +2,7 @@
    usage: node qa/play.js [desktop|mobile] [heroId] [sectors=2] [outDir=qa]  */
 const { chromium } = require('playwright');
 const path = require('path'), fs = require('fs');
-const ROOT = path.resolve(__dirname, '..'), TN = path.resolve(ROOT, 'node_modules', 'three');
+const ROOT = path.resolve(__dirname, '..'), NM = path.resolve(ROOT, 'node_modules');
 const mime = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.json': 'application/json', '.webp': 'image/webp', '.png': 'image/png', '.webmanifest': 'application/manifest+json' };
 const [mode = 'desktop', hero = 'caret', sectorsArg = '2', outDir = path.join(ROOT, 'qa')] = process.argv.slice(2);
 const mobile = mode === 'mobile', SECTORS = +sectorsArg;
@@ -15,7 +15,7 @@ const mobile = mode === 'mobile', SECTORS = +sectorsArg;
   page.on('pageerror', e => errs.push('PAGEERROR: ' + e.message + '\n' + (e.stack || '').split('\n').slice(0, 3).join('\n')));
   await page.route('**/*', async r => {
     const u = new URL(r.request().url());
-    if (u.hostname === 'cdn.jsdelivr.net') { const p = u.pathname.replace('/npm/three@0.170.0', ''); return r.fulfill({ path: path.join(TN, p), contentType: 'text/javascript' }); }
+    if (u.hostname === 'cdn.jsdelivr.net') return r.fulfill({ path: path.join(NM, u.pathname.replace(/^\/npm\/([^@/]+)@[^/]+/, '$1')), contentType: 'text/javascript' });
     if (u.hostname === 'game.local') { const p = u.pathname === '/' ? '/index.html' : decodeURIComponent(u.pathname); const f = path.join(ROOT, p); if (fs.existsSync(f)) return r.fulfill({ path: f, contentType: mime[path.extname(f)] || 'application/octet-stream' }); return r.fulfill({ status: 404 }); }
     if (u.hostname.includes('fonts.g')) return r.fulfill({ status: 200, body: '', contentType: 'text/css' });
     return r.abort();

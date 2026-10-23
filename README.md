@@ -1,6 +1,6 @@
 # Agent Dungeon
 
-A Three.js pixel-dungeon twin-stick shooter. **28 AI agents** fight through **8 sealed sectors**, a CPU army that moves as a squad, three corrupted rival guardians and **10 bosses** to break *The Override*. Every agent carries the same seven-move kit, animated in eight facings, and every dungeon is built procedurally in Three.js to match the AI Dungeon art sheets.
+A Three.js + PixiJS pixel-dungeon twin-stick shooter. **28 AI agents** fight through **8 sealed sectors**, a CPU army that moves as a squad, three corrupted rival guardians and **10 bosses** to break *The Override*. Every agent carries the same seven-move kit, animated in eight facings, and every dungeon is built procedurally in Three.js to match the AI Dungeon art sheets.
 
 By **Collective AI Inc.** — John-Ross Moyler (Hataalii).
 
@@ -11,15 +11,23 @@ The dungeon is rendered as **3D pixel art** so it sits on the same pixel grid as
 - The scene is drawn into a low-resolution target (the short side lands near 330–400 pixels) and blown up with hard pixel edges. One floor texel is one screen pixel at the game's fixed art scale (20 px per world unit).
 - An orthographic camera at a fixed 55° pitch is snapped to whole pixels; the leftover fraction is applied as a sub-pixel shift in the final blit, so scrolling is smooth without shimmer.
 - The blit adds depth outlines (dark edge behind a nearer surface, bright rim on top edges), ACES tone mapping, and posterize + ordered dither. Bloom runs at the low resolution too.
-- Floors, wall faces and wall caps are painted per biome at 40×40 texels per tile. The neon trim on wall caps is drawn only on sides that face open floor, so it traces the maze.
-- Sprites stand as upright cards in depth: they no longer sink into walls, and they sort by where their feet are. The player gets an x-ray silhouette when a wall or rig hides them.
+- Floors, wall faces and wall tops are painted per biome at 40×40 texels per tile, in the sprites' style: chunky stones with a lit top-left lip, dark mortar, moss, cracks and pebbles. Each sector has its own material (flagstones, purple slate, riveted iron, basalt with lava seams, packed snow, mossy cobble, star-flecked stone, sandstone). Wall tops have a lit stone lip on every side that faces floor, and rock far from the rooms sinks into shadow.
+- The dungeon is lit by fire. Torches on the north walls and braziers in room corners share a pool of flickering point lights and throw embers; the ambient fill is low, so rooms glow warm and corridors fall dark.
+- Sprites stand as upright cards in depth: they don't sink into walls, and they sort by where their feet are. The player gets an x-ray silhouette when a wall or rig hides them.
 
-## Props sheet and HUD
+## Living pixels (PixiJS)
 
-`art/source/props_hud_sheet.jpg` is cut into alpha WebPs by `tools/art/slice_sheet.py` (output in `atlas/props/`).
+`src/02b_pixel.js` runs PixiJS beside Three.js:
 
-- **Props:** server racks, terminals, tesla coils, ice pillars and crystals stand against north walls as billboards. Crates are breakable cover (shards, sometimes a pickup). Toxic barrels flash on a short fuse, then explode for area damage plus poison (burn in Inferno Depths) and chain into nearby barrels; the blast also hurts you. The weapon crate is the sealed-annex cache, and the round reactor plate sits under relays and the exit portal.
-- **Icons:** pickups (patch, overclock, burst, context refill), XP shards and buff/status chips use the sheet icons.
+- **Live atlas:** torch and brazier flames, waving banners and the ground cover (grass, fungus, crystals, embers, ice, bones) are redrawn as pixel art at 12 fps on a small Pixi canvas. Three samples it as a nearest-filtered texture on upright 3D cards, so fire flickers frame by frame like the agent sprites. Grass also sways in a vertex-shader wind, and the cards pick up the pooled torch lights.
+- **Painted props:** crates, powder kegs, chests, bookshelves, statues, weapon racks, urns, anvils, giant mushrooms, crystals, hourglasses and the relay rune plate are painted per biome with 1 px outlines and cut into Three textures (20 texels per world unit, the same grid as the floor).
+- **Weather:** a transparent Pixi canvas over the WebGL view, on the same low-res pixel grid, drifts each sector's dust, wisps, ash, embers, snow, spores (with fireflies) or stars, plus fog banks and light shafts. It moves with the camera at parallax depths in front of the dungeon.
+- If PixiJS can't load, the same painters run on a 2D canvas and the weather layer is skipped.
+
+## Props, cover and HUD
+
+- **Props:** painted props stand against north walls as billboards; side walls get low-poly 3D kit pieces (rubble, barrels, crystal clusters, ice spikes, glowcaps, columns). Crates are breakable cover (shards, sometimes a pickup). Powder kegs flash on a short fuse, then explode for area damage plus poison (burn in Inferno Depths) and chain into nearby kegs; the blast also hurts you. A treasure chest is the sealed-annex cache, and the rune plate sits under relays and the exit portal. Vault gates are iron portcullises that rise when the passages are clear.
+- **Icons:** `art/source/props_hud_sheet.jpg` is cut into alpha WebPs by `tools/art/slice_sheet.py` (output in `atlas/props/`). Pickups (patch, overclock, burst, context refill), XP shards and buff/status chips use the sheet icons.
 - **HUD:** the panel, banner and slot frames are 9-sliced with `border-image`; the gradient bar is the health bar (drains from the right, pulses under 30%). The ultimate uses the gold slot.
 
 ## Combat feel
@@ -108,7 +116,8 @@ atlas/
 src/
   01_data.js            roster, kit, statuses, CPU/boss/sector data
   02_engine.js          pixel renderer (low-res target, snapped ortho camera, outline/posterize blit), biome pixel tiles, sprite shader, atlas loading, particles, audio
-  03_world.js           branching sector generator, biome prop kits, sheet props, breakable crates and barrels, gates, seal, switches, traps
+  02b_pixel.js          PixiJS layer: live atlas (flames, banners, tufts), painted props, weather overlay
+  03_world.js           branching sector generator, torches, braziers, living cards, biome prop kits, breakable crates and kegs, portcullis gates, seal, switches, traps
   04_actors.js          8-direction animation, moves, projectiles, statuses, summons
   05_enemies.js         fauna, CPU tactics + squad director, telegraphs, bosses, rivals
   05b_models.js         procedural 3D rigs for the 10 bosses and 12 CPU units
@@ -131,6 +140,6 @@ npm run art:sheet                      # re-cut atlas/props from art/source/prop
 ./tools/art/make_art.sh <batch-dir>    # rebuild every atlas from art/source + the extracted Batch 04–09 zips
 ```
 
-Apart from the agent sprites and the props/HUD sheet, everything is generated in code: bosses and CPU units, biome floor and wall pixel tiles, dungeon layouts, 3D prop kits, gates, traps, telegraphs, particles, sound effects and music. Three.js `0.170.0` loads from jsDelivr via an import map.
+Apart from the agent sprites and the props/HUD sheet, everything is generated in code: bosses and CPU units, biome floor and wall pixel tiles, dungeon layouts, painted props, flames, banners, ground cover, weather, 3D prop kits, gates, traps, telegraphs, particles, sound effects and music. Three.js `0.170.0` and PixiJS `8.6.6` load from jsDelivr via an import map; `npm install` also pulls both locally so the Playwright QA scripts can serve them offline.
 
 The Batch 04–09 art is procedurally posed and fan-made, as its own READMEs note: rear facings are approximations and the mascots are not official vendor art.

@@ -3,7 +3,7 @@
    usage: node qa/all.js [id,id,...] */
 const { chromium } = require('playwright');
 const path = require('path'), fs = require('fs');
-const ROOT = path.resolve(__dirname, '..'), TN = path.resolve(ROOT, 'node_modules', 'three');
+const ROOT = path.resolve(__dirname, '..'), NM = path.resolve(ROOT, 'node_modules');
 (async () => {
   const b = await chromium.launch({ ...(process.env.CHROME ? { executablePath: process.env.CHROME } : {}), args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
   const page = await (await b.newContext({ viewport: { width: 1100, height: 700 } })).newPage();
@@ -11,7 +11,7 @@ const ROOT = path.resolve(__dirname, '..'), TN = path.resolve(ROOT, 'node_module
   page.on('console', m => { if (m.type() === 'error' && !/fonts\.g/.test(m.text())) errs.push(m.text()); });
   page.on('pageerror', e => errs.push('PAGEERROR: ' + e.message + ' ' + e.stack));
   await page.route('**/*', async r => { const u = new URL(r.request().url());
-    if (u.hostname === 'cdn.jsdelivr.net') return r.fulfill({ path: path.join(TN, u.pathname.replace('/npm/three@0.170.0', '')), contentType: 'text/javascript' });
+    if (u.hostname === 'cdn.jsdelivr.net') return r.fulfill({ path: path.join(NM, u.pathname.replace(/^\/npm\/([^@/]+)@[^/]+/, '$1')), contentType: 'text/javascript' });
     if (u.hostname === 'game.local') { const f = path.join(ROOT, u.pathname === '/' ? '/index.html' : decodeURIComponent(u.pathname)); return fs.existsSync(f) ? r.fulfill({ path: f }) : r.fulfill({ status: 404 }); }
     return r.fulfill({ status: 200, body: '' }); });
   await page.goto('http://game.local/');

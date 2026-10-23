@@ -1,14 +1,14 @@
 /* ------------------------------------------------------------------
    WORLD: branching sector layout (Batch 09 Deep Dungeon structure),
-   biome PBR tiles, procedural prop kits that mimic the Batch 08
-   dungeon sheets, energy gates, sealed secret annex, circuit switches,
-   biome traps, crystal pylons with pooled lights, exit portal.
+   stone pixel tiles, torches, braziers, banners and ground tufts that
+   live on the Pixi atlas, painted props, portcullis gates, sealed
+   secret annex, circuit switches, biome traps, exit portal.
 ------------------------------------------------------------------- */
 const TILE = 2;
 const WALL_H = 2.2;
 const T_FLOOR = 0, T_WALL = 1, T_GATE = 2, T_SEAL = 3;
 const world = {
-  W: 0, H: 0, grid: null, rooms: [], group: null, start: null, vault: null, pylons: [], lights: [], explored: null, portal: null,
+  W: 0, H: 0, grid: null, rooms: [], group: null, start: null, vault: null, pylons: [], lights: [], lightSrc: [], cards: null, explored: null, portal: null,
   biome: 'core_facility', sector: null, gateCells: [], sealCells: [], switches: [], traps: [], secret: null, anim: [], gateOpen: false, sealOpen: false, props: [], propAt: new Map(),
 };
 
@@ -152,15 +152,20 @@ function animatedPoolMat(colA, colB, speed = 1) {
     transparent: true, depthWrite: false,
   });
 }
+/* iron portcullis; open slides the grille up into the ceiling */
 function gateMat(col) {
   return new THREE.ShaderMaterial({
     uniforms: { t: SHARED_T, c: { value: new THREE.Color(col) }, open: { value: 0 } },
     vertexShader: 'varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
     fragmentShader: `varying vec2 vUv; uniform float t; uniform vec3 c; uniform float open;
-      void main(){ float scan=0.5+0.5*sin(vUv.y*60.0-t*6.0); float hex=step(0.92,fract(vUv.x*8.0+sin(vUv.y*20.0+t)*0.05))+step(0.92,fract(vUv.y*6.0));
-        float edge=smoothstep(0.0,0.08,vUv.y)*smoothstep(1.0,0.9,vUv.y); float a=(0.18+scan*0.25+hex*0.5)*edge*(1.0-open);
-        if(vUv.y>1.0-open) discard; gl_FragColor=vec4(c*(1.5+hex*2.0),a); }`,
-    transparent: true, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+      void main(){ vec2 p=vec2(vUv.x, vUv.y-open); if(p.y<0.0) discard;
+        float bx=fract(p.x*9.0), by=fract(p.y*5.0); bool bar=bx<0.26, cross=by<0.1 && p.y>0.06;
+        if(!bar && !cross) discard;
+        vec3 col=vec3(0.13,0.14,0.17)*(bar ? (bx<0.08 ? 2.2 : 1.0) : 1.5);
+        if(bar && cross) col+=c*(0.35+0.15*sin(t*3.0));
+        if(bar && p.y<0.06) col*=1.6;
+        gl_FragColor=vec4(col,1.0); }`,
+    side: THREE.DoubleSide,
   });
 }
 function decalRingMat(col, ticks = 12) {
@@ -189,27 +194,29 @@ function initPropGeo() {
 }
 /* each kit: wall-hugging decor + free-standing feature, as lists of parts [geo, mat, pos, scale, rot] */
 function propKit(bk) {
-  const B = BIOMES[bk], glow = new THREE.Color(B.glow), acc = new THREE.Color(B.accent);
+  const B = BIOMES[bk], glow = new THREE.Color(B.flame[1]), acc = new THREE.Color(B.accent);
   const std = (c, e = 0x000000, ei = 0, o = {}) => new THREE.MeshStandardMaterial({ color: c, emissive: e, emissiveIntensity: ei, roughness: o.r ?? 0.6, metalness: o.m ?? 0.4, map: o.map ?? null, transparent: !!o.op, opacity: o.op ?? 1 });
   const metal = std(0x3a4252, 0, 0, { m: 0.85, r: 0.4, map: TEX.metal.map });
-  const lum = glow.getHSL({}).l, glowM = std(0x111111, glow, 2.2 - lum, { m: 0.1, r: 0.3 }), accM = std(0x111111, acc, 1.9 - lum * 0.6, { m: 0.1, r: 0.3 });
+  // kit glows stay modest: the scene is lit by fire now, so a strong emissive reads as a neon sign
+  const lum = glow.getHSL({}).l, glowM = std(0x111111, glow, (2.2 - lum) * 0.5, { m: 0.1, r: 0.3 }), accM = std(0x111111, acc, (1.9 - lum * 0.6) * 0.4, { m: 0.1, r: 0.3 });
   const darkM = std(new THREE.Color(B.dark).multiplyScalar(1.6), 0, 0, { r: 0.8, m: 0.2 });
   const baseM = std(new THREE.Color(B.base), 0, 0, { r: 0.7, m: 0.2 });
+  const woodM = std(0x6b3f22, 0, 0, { r: 0.85, m: 0.05 }), ironM = std(0x3a3e48, 0, 0, { r: 0.5, m: 0.7 });
   const k = { wall: [], feature: [], pool: null, mats: [glowM, accM] };
   switch (bk) {
     case 'core_facility':
-      k.wall.push([[G3.box, metal, [0, 0.95, 0], [0.9, 1.9, 0.55]], [G3.box, glowM, [0, 1.2, 0.29], [0.7, 0.05, 0.02]], [G3.box, glowM, [0, 0.8, 0.29], [0.7, 0.05, 0.02]], [G3.box, accM, [0.3, 1.6, 0.29], [0.06, 0.06, 0.02]]]); // server rack
-      k.wall.push([[G3.cyl, metal, [0, 0.12, 0], [0.9, 0.24, 0.9]], [G3.torus, glowM, [0, 0.25, 0], [0.8, 0.8, 0.8], [Math.PI / 2, 0, 0]]]); // floor vent
-      k.feature.push([[G3.cyl6, darkM, [0, 0.4, 0], [1.2, 0.8, 1.2]], [G3.box, metal, [0, 1.15, 0], [0.7, 0.9, 0.5]], [G3.box, glowM, [0, 1.3, 0.26], [0.55, 0.35, 0.01]]]); // terminal
+      k.wall.push([[G3.dod, baseM, [0, 0.3, 0], [0.8, 0.6, 0.7]], [G3.dod, darkM, [0.4, 0.2, 0.25], [0.45, 0.4, 0.45]], [G3.dod, baseM, [-0.35, 0.18, 0.3], [0.35, 0.3, 0.35]]]); // rubble
+      k.wall.push([[G3.cyl, woodM, [0, 0.5, 0], [0.75, 1.0, 0.75]], [G3.torus, ironM, [0, 0.25, 0], [0.75, 0.75, 0.75], [Math.PI / 2, 0, 0]], [G3.torus, ironM, [0, 0.78, 0], [0.75, 0.75, 0.75], [Math.PI / 2, 0, 0]]]); // barrel
+      k.feature.push([[G3.cyl6, darkM, [0, 0.2, 0], [1.3, 0.4, 1.3]], [G3.cyl, baseM, [0, 1.2, 0], [0.75, 1.8, 0.75]], [G3.dod, baseM, [0.15, 2.2, 0], [0.7, 0.45, 0.6]]]); // broken column
       break;
     case 'shadow_realm':
       k.wall.push([[G3.oct, std(0x2a1450, glow, 1.6, { r: 0.15, m: 0.1 }), [0, 0.8, 0], [0.5, 1.6, 0.5]], [G3.oct, std(0x2a1450, glow, 1.2, { r: 0.15 }), [0.35, 0.45, 0.1], [0.3, 0.9, 0.3], [0, 0, 0.5]], [G3.oct, std(0x2a1450, acc, 1.2, { r: 0.15 }), [-0.3, 0.4, -0.1], [0.25, 0.8, 0.25], [0, 0, -0.4]]]); // crystal cluster
       k.feature.push([[G3.box, darkM, [0, 1.3, 0], [0.7, 2.6, 0.7]], [G3.cone4, darkM, [0, 2.85, 0], [0.7, 0.5, 0.7]], [G3.box, glowM, [0, 1.6, 0.36], [0.12, 1.4, 0.02]]]); // obelisk
       break;
     case 'voltage_foundry':
-      k.wall.push([[G3.cyl, metal, [0, 1, 0], [0.35, 2, 0.35]], [G3.torus, accM, [0, 1.6, 0], [0.7, 0.7, 0.7], [Math.PI / 2, 0, 0]], [G3.torus, accM, [0, 1.2, 0], [0.6, 0.6, 0.6], [Math.PI / 2, 0, 0]], [G3.sph, glowM, [0, 2.1, 0], [0.45, 0.45, 0.45]]]); // tesla coil
-      k.wall.push([[G3.box, std(0x4a3a20, 0, 0, { r: 0.8, m: 0.3 }), [0, 0.4, 0], [0.8, 0.8, 0.8]], [G3.box, accM, [0, 0.4, 0.41], [0.8, 0.12, 0.01]]]); // crate
-      k.feature.push([[G3.cyl, metal, [0, 0.9, 0], [1.1, 1.8, 1.1]], [G3.cyl, glowM, [0, 1.85, 0], [0.9, 0.1, 0.9]], [G3.box, metal, [0.6, 0.6, 0], [0.4, 0.3, 0.3]]]); // generator
+      k.wall.push([[G3.box, woodM, [0, 0.4, 0], [0.8, 0.8, 0.8]], [G3.box, ironM, [0, 0.4, 0.41], [0.8, 0.1, 0.01]], [G3.box, woodM, [0.1, 1.05, 0], [0.55, 0.5, 0.55], [0, 0.4, 0]]]); // crates
+      k.wall.push([[G3.cyl, std(0xb87333, 0, 0, { r: 0.4, m: 0.8 }), [0, 0.8, 0], [0.3, 1.6, 0.3]], [G3.torus, ironM, [0, 1.4, 0], [0.6, 0.6, 0.6], [Math.PI / 2, 0, 0]], [G3.sph, glowM, [0, 1.75, 0], [0.32, 0.32, 0.32]]]); // spark rod
+      k.feature.push([[G3.box, darkM, [0, 0.9, 0], [1.5, 1.8, 1.2]], [G3.box, glowM, [0, 0.55, 0.61], [0.8, 0.5, 0.02]], [G3.cyl, ironM, [0, 2.2, 0], [0.45, 0.9, 0.45]]]); // furnace
       break;
     case 'inferno_depths':
       k.wall.push([[G3.cone, darkM, [0, 1.0, 0], [0.8, 2.0, 0.8]], [G3.cone, std(0x221010, acc, 1.4), [0.3, 0.5, 0.2], [0.35, 1.0, 0.35]]]); // basalt spire
@@ -222,7 +229,7 @@ function propKit(bk) {
       k.pool = animatedPoolMat(0x2a7ea0, 0xd4f9ff, 0.25);
       break;
     case 'toxic_hive':
-      k.wall.push([[G3.sph, std(0x2a3a14, glow, 1.6, { r: 0.4, m: 0.1 }), [0, 0.55, 0], [0.8, 1.1, 0.8]], [G3.sph, std(0x2a3a14, acc, 1.3, { r: 0.4 }), [0.45, 0.35, 0.2], [0.45, 0.6, 0.45]], [G3.cone, darkM, [0, 0.12, 0], [1.2, 0.24, 1.2]]]); // egg pods
+      k.wall.push([[G3.cyl, std(0xd8ccae, 0, 0, { r: 0.8, m: 0 }), [0, 0.45, 0], [0.22, 0.9, 0.22]], [G3.sph, std(0x2a3a14, glow, 1.2, { r: 0.4, m: 0.1 }), [0, 0.95, 0], [0.9, 0.4, 0.9]], [G3.cyl, std(0xd8ccae, 0, 0, { r: 0.8, m: 0 }), [0.4, 0.25, 0.2], [0.14, 0.5, 0.14]], [G3.sph, std(0x2a3a14, glow, 1.0, { r: 0.4 }), [0.4, 0.52, 0.2], [0.5, 0.24, 0.5]]]); // glowcaps
       k.feature.push([[G3.cyl, darkM, [0, 1.0, 0], [0.5, 2.0, 0.5], [0.15, 0, 0.1]], [G3.sph, std(0x2a3a14, glow, 2, { r: 0.4 }), [0, 2.1, 0], [0.7, 0.7, 0.7]]]); // stalk
       k.pool = animatedPoolMat(0x2e6a10, 0xd8ff6a, 0.6);
       break;
@@ -231,7 +238,7 @@ function propKit(bk) {
       k.feature.push([[G3.cyl, darkM, [0, 0.15, 0], [1.4, 0.3, 1.4]], [G3.torus, glowM, [0, 1.3, 0], [1.4, 1.4, 1.4], [Math.PI / 2.4, 0, 0]], [G3.sph, std(0x000000, 0x000000, 0, { r: 1, m: 0 }), [0, 1.3, 0], [0.55, 0.55, 0.55]]]); // rift beacon
       break;
     case 'chrono_spire':
-      k.wall.push([[G3.cyl, baseM, [0, 1.1, 0], [0.6, 2.2, 0.6]], [G3.box, accM.clone(), [0, 2.25, 0], [0.8, 0.12, 0.8]], [G3.box, std(0x302010, glow, 1.6), [0, 0.08, 0], [0.8, 0.16, 0.8]]]); // marble column
+      k.wall.push([[G3.cyl, baseM, [0, 1.1, 0], [0.6, 2.2, 0.6]], [G3.box, baseM, [0, 2.25, 0], [0.8, 0.12, 0.8]], [G3.box, baseM, [0, 0.08, 0], [0.8, 0.16, 0.8]]]); // marble column
       k.feature.push([[G3.cyl, baseM, [0, 0.5, 0], [0.9, 1.0, 0.9]], [G3.sph, std(0xffe2a0, glow, 1.8, { r: 0.2, m: 0.6 }), [0, 1.3, 0], [0.55, 0.55, 0.55]], [G3.torus, glowM, [0, 1.3, 0], [1.0, 1.0, 1.0], [Math.PI / 2, 0, 0]]]); // hourglass orrery
       break;
   }
@@ -252,8 +259,16 @@ function instanceParts(grp, parts, placements) {
 }
 
 function buildMaterials() {
-  MAT.pylon = new THREE.MeshStandardMaterial({ ...TEX.metal, color: 0x3a4255, metalness: 0.85, roughness: 1 });
+  MAT.pylon = new THREE.MeshStandardMaterial({ map: TEX.metal.map, normalMap: TEX.metal.normalMap, color: 0x6a6660, metalness: 0.05, roughness: 0.9 });
+  MAT.iron = new THREE.MeshStandardMaterial({ color: 0x2a2c32, metalness: 0.7, roughness: 0.5 });
+  MAT.wood = new THREE.MeshStandardMaterial({ color: 0x5a3420, metalness: 0, roughness: 0.9 });
   MAT.crystal = new THREE.MeshStandardMaterial({ color: 0x66e0ff, emissive: 0x2fbfff, emissiveIntensity: 2.2, roughness: 0.15, metalness: 0.1, transparent: true, opacity: 0.92 });
+}
+/* rock tops glow faintly with their own texture so the mass between rooms never drops to black; the
+   per-instance depth shade also dims that glow, so rock far from the rooms still sinks into shadow */
+function rockTop(m) {
+  m.onBeforeCompile = sh => { sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n#if defined( USE_COLOR ) || defined( USE_INSTANCING_COLOR )\n\ttotalEmissiveRadiance *= vColor.rgb;\n#endif'); };
+  m.customProgramCacheKey = () => 'rockTop'; return m;
 }
 function biomeSurface(bk) {
   const B = BIOMES[bk], T = biomeMaps(bk), acc = new THREE.Color(B.accent);
@@ -262,32 +277,31 @@ function biomeSurface(bk) {
   return {
     floors: T.floor.map(m => std(m, { r: 0.7, ei: 1 })),
     side: std(T.side, { ei: 1 }),
-    top: mask => (tops[mask] ||= std(wallTopMaps(bk, mask), { ei: 1.05, r: 0.9 })),
+    top: (mask, v = 0) => (tops[mask + '.' + v] ||= rockTop(std({ map: wallTopMaps(bk, mask, v).map, emissiveMap: wallTopMaps(bk, mask, v).map }, { ei: 0.3, r: 0.9 }))),
     seal: new THREE.MeshStandardMaterial({ map: T.side.map, color: 0xd8c08a, roughness: 0.6, metalness: 0.3, emissive: acc, emissiveIntensity: 0.35 }),
   };
 }
 
-/* ---------- sheet props: standing billboards from the props sheet ---------- */
+/* ---------- painted props: standing billboards painted by the Pixi layer (02b_pixel.js) ---------- */
 const PROP_KIT = {
-  core_facility:   { wall: ['server', 'terminal', 'server'], crate: 'crate_tech', crates: 2, barrels: 1 },
-  shadow_realm:    { wall: ['crystal', 'crystal', 'terminal'], crate: 'crate_tech', crates: 2, barrels: 1 },
-  voltage_foundry: { wall: ['tesla', 'server', 'tesla'], crate: 'crate_tech', crates: 2, barrels: 1 },
-  inferno_depths:  { wall: ['terminal', 'server'], crate: 'crate_hot', crates: 2, barrels: 2 },
-  glacial_vault:   { wall: ['ice_pillar', 'ice_pillar', 'server'], crate: 'crate_tech', crates: 2, barrels: 1 },
-  toxic_hive:      { wall: ['terminal', 'crystal'], crate: 'crate_tech', crates: 1, barrels: 3 },
-  astral_rift:     { wall: ['crystal', 'server'], crate: 'crate_tech', crates: 2, barrels: 1 },
-  chrono_spire:    { wall: ['server', 'terminal', 'crystal'], crate: 'crate_hot', crates: 2, barrels: 1 },
+  core_facility:   { wall: ['shelf', 'statue', 'rack', 'urn'], crates: 2, barrels: 1 },
+  shadow_realm:    { wall: ['statue', 'bigshroom', 'crystal', 'shelf'], crates: 2, barrels: 1 },
+  voltage_foundry: { wall: ['anvil', 'rack', 'urn', 'anvil'], crates: 2, barrels: 2 },
+  inferno_depths:  { wall: ['statue', 'urn', 'rack', 'anvil'], crates: 2, barrels: 2 },
+  glacial_vault:   { wall: ['statue', 'crystal', 'urn', 'shelf'], crates: 2, barrels: 1 },
+  toxic_hive:      { wall: ['bigshroom', 'urn', 'bigshroom', 'statue'], crates: 1, barrels: 3 },
+  astral_rift:     { wall: ['crystal', 'statue', 'crystal', 'urn'], crates: 2, barrels: 1 },
+  chrono_spire:    { wall: ['hourglass', 'shelf', 'statue', 'urn'], crates: 2, barrels: 1 },
 };
-const PROP_W = { crate_tech: 1.95, crate_hot: 1.95, server: 1.3, terminal: 1.5, tesla: 1.15, ice_pillar: 1.3, barrel: 1.45, crystal: 1.1, cache: 1.9 };
 function propSprite(name, x, z, o = {}) {
-  const T = PROPS[name], w = (o.w ?? PROP_W[name] ?? 1.5), h = w * T.h / T.w;
+  const T = PROPS[name], w = (o.w ?? T.ww ?? 1.5), h = w * T.h / T.w;
   const m = pixelSpriteMat(T.tex, { gain: o.gain ?? 1 }); m.alphaTest = 0.5; m.depthWrite = true; m.transparent = false;
   const s = new THREE.Sprite(m); s.center.set(0.5, o.cy ?? 0.04); s.scale.set(w, h, 1); s.position.set(x, 0, z); s.renderOrder = 2;
   return s;
 }
 /* crates and barrels: solid cover that breaks; barrels blow up */
 function addBreakable(name, tx, ty) {
-  const x = (tx + 0.5) * TILE, z = (ty + 0.5) * TILE, explosive = name === 'barrel';
+  const x = (tx + 0.5) * TILE, z = (ty + 0.5) * TILE, explosive = name === 'keg';
   const s = propSprite(name, x, z); world.group.add(s);
   const hp = (explosive ? 10 : 34) * (1 + (G.floor - 1) * 0.25);
   const pr = { name, tx, ty, x, z, s, mat: s.material, hp, maxHp: hp, explosive, flash: 0, wob: 0, alive: true, fuse: -1 };
@@ -298,15 +312,15 @@ function propAtPoint(x, z) { return world.propAt.get(worldToTile(z) * world.W + 
 function damageProp(pr, d, kx = 0, kz = 0) {
   if (!pr || !pr.alive || pr.fuse >= 0) return;
   pr.hp -= d; pr.flash = 0.08; pr.wob = 1; AUDIO.sfx.hit();
-  particles.emit(pr.x, 0.8, pr.z, pr.explosive ? 0x9bea52 : BIOMES[world.biome].glow, 4, { speed: 4, life: 0.3, size: 0.18 });
+  particles.emit(pr.x, 0.8, pr.z, pr.explosive ? 0xffb050 : 0xc58a4c, 4, { speed: 4, life: 0.3, size: 0.18 });
   if (pr.hp <= 0) { if (pr.explosive) { pr.fuse = 0.42; AUDIO.sfx.warn(); } else breakProp(pr); }
 }
 function propsNear(x, z, R) { return world.props.filter(pr => pr.alive && Math.hypot(pr.x - x, pr.z - z) < R + 0.9); }
 function breakProp(pr) {
   if (!pr.alive) return; pr.alive = false; world.group.remove(pr.s); pr.mat.dispose();
   world.grid[pr.ty * world.W + pr.tx] = T_FLOOR; world.propAt.delete(pr.ty * world.W + pr.tx); G.flowDirty = true;
-  const B = BIOMES[world.biome], acc = pr.name === 'crate_hot' ? 0xff8a3a : B.glow;
-  debrisBurst(pr.x, pr.z, [0x1a2440, 0x2a3a66, acc], pr.explosive ? 16 : 12);
+  const B = BIOMES[world.biome], acc = pr.explosive ? (world.biome === 'toxic_hive' ? 0x9bea52 : 0xff8a3a) : 0xc58a4c;
+  debrisBurst(pr.x, pr.z, [0x43261a, 0x6b3f22, acc], pr.explosive ? 16 : 12);
   particles.emit(pr.x, 0.9, pr.z, acc, 18, { speed: 6, life: 0.45, size: 0.22, up: 1.4 });
   AUDIO.sfx.kill(); shakeAdd(0.2);
   if (pr.explosive) explodeBarrel(pr);
@@ -336,8 +350,45 @@ function updateProps(dt) {
 
 function clearWorld() {
   if (world.group) { scene.remove(world.group); world.group.traverse(o => { if (o.geometry && !Object.values(G3).includes(o.geometry)) o.geometry.dispose(); }); }
-  world.lights.forEach(l => scene.remove(l)); world.lights = [];
+  world.lights.forEach(l => scene.remove(l)); world.lights = []; world.lightSrc = []; world.braziers = [];
   world.anim = []; world.props = []; world.propAt = new Map();
+}
+/* ---------- living cards: flames, banners and tufts cut from the Pixi live atlas ----------
+   Upright quads stretched by 1/cos(pitch) so their texels land square on screen. Grass leans in
+   a slow wind, flames burn at full brightness, everything else picks up the pooled torch lights. */
+const CARD_H = 1 / Math.cos(CAM_PITCH), CARD_LIGHTS = 8;
+let cardMat = null;
+function getCardMat() {
+  if (cardMat) return cardMat;
+  cardMat = new THREE.ShaderMaterial({
+    uniforms: { map: { value: PIX.liveTex }, t: SHARED_T, uAtlas: { value: new THREE.Vector2(LIVE_W, LIVE_H) }, uAmb: { value: new THREE.Color(0.4, 0.4, 0.4) },
+      uLP: { value: Array.from({ length: CARD_LIGHTS }, () => new THREE.Vector3(0, -99, 0)) }, uLC: { value: Array.from({ length: CARD_LIGHTS }, () => new THREE.Color(0, 0, 0)) } },
+    vertexShader: `attribute vec4 aRect; attribute vec4 aP; uniform float t; uniform vec2 uAtlas;
+      varying vec2 vUv; varying float vGlow; varying vec3 vW;
+      void main(){ vec3 p=position; float top=uv.y;
+        p.x+=(sin(t*(1.1+aP.y)+aP.x)+0.4*sin(t*2.7+aP.x*1.7))*aP.y*0.06*top*top;
+        float u=aP.w>0.5 ? 1.0-uv.x : uv.x;
+        vUv=vec2((aRect.x+u*aRect.z)/uAtlas.x, 1.0-(aRect.y+(1.0-uv.y)*aRect.w)/uAtlas.y);
+        vGlow=aP.z; vec4 w=modelMatrix*instanceMatrix*vec4(p,1.0); vW=w.xyz; gl_Position=projectionMatrix*viewMatrix*w; }`,
+    fragmentShader: `uniform sampler2D map; uniform vec3 uAmb; uniform vec3 uLP[${CARD_LIGHTS}]; uniform vec3 uLC[${CARD_LIGHTS}];
+      varying vec2 vUv; varying float vGlow; varying vec3 vW;
+      void main(){ vec4 c=texture2D(map,vUv); if(c.a<0.5) discard;
+        vec3 L=uAmb; for(int i=0;i<${CARD_LIGHTS};i++){ float d=distance(vW,uLP[i]); L+=uLC[i]*pow(clamp(1.0-d/10.0,0.0,1.0),1.5); }
+        gl_FragColor=vec4(c.rgb*mix(L,vec3(0.72),vGlow),1.0); }`,
+  });
+  return cardMat;
+}
+function cardLayer(grp, items) {
+  if (!items.length) return null;
+  const geo = new THREE.PlaneGeometry(1, 1).translate(0, 0.5, 0), n = items.length, rectA = new Float32Array(n * 4), pA = new Float32Array(n * 4);
+  const im = new THREE.InstancedMesh(geo, getCardMat(), n), m = new THREE.Matrix4();
+  items.forEach((it, i) => {
+    const [cx, cy, cw, ch] = LIVE_CELLS[it.cell];
+    m.makeScale(cw / PROP_TEXELS, ch / PROP_TEXELS * CARD_H, 1); m.setPosition(it.x, it.y, it.z); im.setMatrixAt(i, m);
+    rectA.set([cx, cy, cw, ch], i * 4); pA.set([Math.random() * 6.3, it.sway || 0, it.glow ? 1 : 0, it.flip ? 1 : 0], i * 4);
+  });
+  geo.setAttribute('aRect', new THREE.InstancedBufferAttribute(rectA, 4)); geo.setAttribute('aP', new THREE.InstancedBufferAttribute(pA, 4));
+  im.frustumCulled = false; im.renderOrder = 2; grp.add(im); return im;
 }
 function buildWorld(secIndex, seed = (Math.random() * 1e9) | 0) {
   clearWorld();
@@ -346,8 +397,10 @@ function buildWorld(secIndex, seed = (Math.random() * 1e9) | 0) {
   Object.assign(world, { W: d.W, H: d.H, grid: d.grid, rooms: d.rooms, start: d.start, vault: d.vault, biome: bk, sector: sec, gateOpen: false, sealOpen: false });
   world.explored = new Uint8Array(d.W * d.H);
   const grp = new THREE.Group(); world.group = grp; scene.add(grp);
+  pixBiome(bk); // repaint the Pixi live atlas + props for this biome
   scene.fog.color.setHex(B.fog); scene.background.setHex(B.fog);
-  hemi.color.setHex(B.hemi[0]); hemi.groundColor.setHex(B.hemi[1]); hemi.intensity = 2.1; moon.intensity = 1.3; moon.color.set(B.glow).lerp(new THREE.Color(0xffffff), 0.6);
+  // dimmer fill so the torches and braziers carry the scene
+  hemi.color.setHex(B.hemi[0]); hemi.groundColor.setHex(B.hemi[1]); hemi.intensity = 1.6; moon.intensity = 0.75; moon.color.set(B.hemi[0]).lerp(new THREE.Color(0xffffff), 0.4);
   const surf = biomeSurface(bk), glow = new THREE.Color(B.glow), acc = new THREE.Color(B.accent);
   const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(1, 1, 1), p = new THREE.Vector3(), col = new THREE.Color(), up = new THREE.Vector3(0, 1, 0);
   const R = mulberry(seed + 9);
@@ -355,7 +408,7 @@ function buildWorld(secIndex, seed = (Math.random() * 1e9) | 0) {
   // floor tiles in four painted variants (gate + seal cells get floor under them too)
   const fgeo = new THREE.PlaneGeometry(TILE, TILE); fgeo.rotateX(-Math.PI / 2);
   const byVariant = [[], [], [], []];
-  for (let y = 0; y < d.H; y++) for (let x = 0; x < d.W; x++) if (d.grid[y * d.W + x] !== T_WALL) { const r = R(); byVariant[r < 0.58 ? 0 : r < 0.88 ? 1 : r < 0.96 ? 2 : 3].push([x, y]); }
+  for (let y = 0; y < d.H; y++) for (let x = 0; x < d.W; x++) if (d.grid[y * d.W + x] !== T_WALL) { const r = R(); byVariant[r < 0.6 ? 0 : r < 0.92 ? 1 : r < 0.97 ? 2 : 3].push([x, y]); }
   byVariant.forEach((cells, v) => {
     if (!cells.length) return; const im = new THREE.InstancedMesh(fgeo, surf.floors[v], cells.length);
     cells.forEach(([x, y], k) => { m.compose(p.set((x + 0.5) * TILE, 0, (y + 0.5) * TILE), q.identity(), s); im.setMatrixAt(k, m); col.setScalar(0.9 + R() * 0.1); im.setColorAt(k, col); });
@@ -366,12 +419,16 @@ function buildWorld(secIndex, seed = (Math.random() * 1e9) | 0) {
   const byMask = {};
   for (let y = 0; y < d.H; y++) for (let x = 0; x < d.W; x++) if (d.grid[y * d.W + x] === T_WALL) {
     const mask = (open(x, y - 1) ? 1 : 0) | (open(x + 1, y) ? 2 : 0) | (open(x, y + 1) ? 4 : 0) | (open(x - 1, y) ? 8 : 0);
-    (byMask[mask] ||= []).push([x, y]);
+    (byMask[mask + '.' + (mask ? 0 : (x * 7 + y * 13) % 3)] ||= []).push([x, y]); // solid rock gets three variants against tiling
   }
+  // rock far from any floor sinks into shadow: BFS distance from open cells
+  const deep = new Uint8Array(d.W * d.H).fill(9), bfs = [];
+  for (let i = 0; i < d.W * d.H; i++) if (d.grid[i] !== T_WALL) { deep[i] = 0; bfs.push(i); }
+  for (let h = 0; h < bfs.length; h++) { const i = bfs[h], x = i % d.W, y = (i - x) / d.W; if (deep[i] >= 6) continue; for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const nx = x + dx, ny = y + dy, j = ny * d.W + nx; if (nx >= 0 && ny >= 0 && nx < d.W && ny < d.H && deep[j] > deep[i] + 1) { deep[j] = deep[i] + 1; bfs.push(j); } } }
   const wgeo = new THREE.BoxGeometry(TILE, WALL_H, TILE);
-  for (const [mask, cells] of Object.entries(byMask)) {
-    const top = surf.top(+mask), im = new THREE.InstancedMesh(wgeo, [surf.side, surf.side, top, top, surf.side, surf.side], cells.length);
-    cells.forEach(([x, y], i) => { m.compose(p.set((x + 0.5) * TILE, WALL_H / 2, (y + 0.5) * TILE), q.identity(), s); im.setMatrixAt(i, m); col.setScalar(0.9 + R() * 0.1); im.setColorAt(i, col); });
+  for (const [key, cells] of Object.entries(byMask)) {
+    const [mask, tv] = key.split('.').map(Number), top = surf.top(mask, tv), im = new THREE.InstancedMesh(wgeo, [surf.side, surf.side, top, top, surf.side, surf.side], cells.length);
+    cells.forEach(([x, y], i) => { m.compose(p.set((x + 0.5) * TILE, WALL_H / 2, (y + 0.5) * TILE), q.identity(), s); im.setMatrixAt(i, m); const k = deep[y * d.W + x]; col.setScalar((0.9 + R() * 0.1) * (k <= 1 ? 1 : Math.max(0.5, 1 - (k - 1) * 0.11))); im.setColorAt(i, col); });
     grp.add(im);
   }
 
@@ -386,7 +443,7 @@ function buildWorld(secIndex, seed = (Math.random() * 1e9) | 0) {
       const panel = new THREE.Mesh(new THREE.PlaneGeometry((y1 - y0) * TILE, WALL_H * 1.2), gmat);
       panel.rotation.y = Math.PI / 2; panel.position.set(gx * TILE, WALL_H * 0.6, (y0 + y1) / 2 * TILE); grp.add(panel); world.gateMeshes.push(panel);
     }
-    for (const gy of [y0, y1]) { const post = new THREE.Mesh(G3.box, MAT.pylon); post.scale.set((x1 - x0) * TILE, WALL_H * 1.3, 0.35); post.position.set((x0 + x1) / 2 * TILE, WALL_H * 0.65, gy * TILE); grp.add(post); const strip = new THREE.Mesh(G3.box, new THREE.MeshBasicMaterial({ color: acc })); strip.scale.set((x1 - x0) * TILE, 0.08, 0.37); strip.position.set((x0 + x1) / 2 * TILE, WALL_H * 1.25, gy * TILE); grp.add(strip); }
+    for (const gy of [y0, y1]) { const post = new THREE.Mesh(G3.box, MAT.pylon); post.scale.set((x1 - x0) * TILE, WALL_H * 1.3, 0.35); post.position.set((x0 + x1) / 2 * TILE, WALL_H * 0.65, gy * TILE); grp.add(post); }
   }
   // sealed secret wall
   world.secret = d.secret ? { ...d.secret, found: false, claimed: false } : null; world.sealMeshes = [];
@@ -403,6 +460,7 @@ function buildWorld(secIndex, seed = (Math.random() * 1e9) | 0) {
     if (d.switches.some(sw => Math.abs(sw.tx - x) + Math.abs(sw.ty - y) < 3) || d.traps.some(tr => Math.abs(tr.tx - x) + Math.abs(tr.ty - y) < 3)) continue;
     if (!d.rooms.some(r => x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h)) continue; // rooms only, corridors stay clear
     const [dx, dy] = n[0];
+    if (dy === -1 && R() < 0.45) continue; // leave room on north walls for torches and banners
     wallSpots.push({ tx: x, ty: y, dx, dy, x: (x + 0.5 + dx * 0.22) * TILE, z: (y + 0.5 + dy * 0.22) * TILE, ry: Math.atan2(-dx, -dy), s: 0.9 + R() * 0.35, kind: Math.floor(R() * kit.wall.length) });
     if (wallSpots.length > 120) break;
   }
@@ -411,7 +469,7 @@ function buildWorld(secIndex, seed = (Math.random() * 1e9) | 0) {
     const spots = r.zone === 'vault' ? [] : [[r.x + Math.floor(r.w / 2), r.y + 2]];
     for (const [x, y] of spots) if (d.grid[y * d.W + x] === T_FLOOR && kit.feature.length) { featureSpots.push({ tx: x, ty: y, x: (x + 0.5) * TILE, z: (y + 0.5) * TILE, ry: R() * 6, s: 1, kind: Math.floor(R() * kit.feature.length) }); d.grid[y * d.W + x] = T_WALL; }
   }
-  // spots on a north wall face the camera: they get the painted sheet props; side walls keep 3D kit pieces
+  // spots on a north wall face the camera: they get painted props; side walls keep 3D kit pieces
   const sheet = PROP_KIT[bk];
   for (const w of wallSpots) {
     d.grid[w.ty * d.W + w.tx] = T_WALL;
@@ -426,7 +484,7 @@ function buildWorld(secIndex, seed = (Math.random() * 1e9) | 0) {
   const taken = [...wallSpots, ...featureSpots, ...d.switches, ...d.traps];
   for (const r of d.rooms) {
     if (r.zone !== 'north' && r.zone !== 'south') continue;
-    const want = [...Array(sheet.crates + (R() < 0.5 ? 1 : 0)).fill(sheet.crate), ...Array(Math.round(sheet.barrels * (0.5 + R()))).fill('barrel')];
+    const want = [...Array(sheet.crates + (R() < 0.5 ? 1 : 0)).fill('crate'), ...Array(Math.round(sheet.barrels * (0.5 + R()))).fill('keg')];
     for (const name of want) for (let t = 0; t < 30; t++) {
       const tx = r.x + 2 + Math.floor(R() * (r.w - 4)), ty = r.y + 2 + Math.floor(R() * (r.h - 4));
       let clear = true; for (let yy = ty - 1; yy <= ty + 1 && clear; yy++) for (let xx = tx - 1; xx <= tx + 1; xx++) if (d.grid[yy * d.W + xx] !== T_FLOOR) { clear = false; break; }
@@ -449,7 +507,7 @@ function buildWorld(secIndex, seed = (Math.random() * 1e9) | 0) {
       let mesh;
       if (bk === 'chrono_spire') { mesh = new THREE.Mesh(G3.gear, new THREE.MeshStandardMaterial({ color: 0xc9a25c, metalness: 0.9, roughness: 0.3, emissive: glow, emissiveIntensity: 0.25 })); mesh.scale.setScalar(2 + R() * 2.5); mesh.position.set(x, 5 + R() * 3, z); mesh.rotation.x = -Math.PI / 2 + (R() - 0.5) * 0.4; }
       else if (bk === 'astral_rift') { mesh = new THREE.Mesh(G3.dod, new THREE.MeshStandardMaterial({ color: 0x2a2450, roughness: 0.8, metalness: 0.2, emissive: acc, emissiveIntensity: 0.15 })); mesh.scale.set(1.2 + R() * 1.5, 0.8 + R(), 1.2 + R() * 1.5); mesh.position.set(x, 4 + R() * 3, z); }
-      else { mesh = new THREE.Mesh(G3.cyl, MAT.pylon); mesh.scale.set(0.5, 1, 0.5); mesh.rotation.z = Math.PI / 2; mesh.scale.set(0.45, TILE * (3 + R() * 6), 0.45); mesh.position.set(x, WALL_H + 0.6, z); }
+      else { mesh = new THREE.Mesh(G3.box, MAT.wood); mesh.scale.set(TILE * (3 + R() * 6), 0.5, 0.5); mesh.position.set(x, WALL_H + 0.6, z); } // rafters
       grp.add(mesh); world.anim.push({ mesh, kind: bk, t: R() * 6, y: mesh.position.y, sp: (R() - 0.5) * 0.6 });
     }
   }
@@ -462,23 +520,49 @@ function buildWorld(secIndex, seed = (Math.random() * 1e9) | 0) {
   // vault arena decal
   { const [vx, vz] = roomCenter(d.vault); const dec = new THREE.Mesh(G3.plane, decalRingMat(glow, 12)); dec.scale.setScalar(16); dec.position.set(vx, 0.05, vz); dec.renderOrder = 1; grp.add(dec); }
 
-  // crystal pylons (light sources) tinted per biome
-  world.pylons = [];
-  const crystal = MAT.crystal; crystal.color.copy(glow); crystal.emissive.copy(glow); crystal.emissiveIntensity = Math.max(0.25, 1.1 - glow.getHSL({}).l * 1.2);
-  const pg = new THREE.CylinderGeometry(0.28, 0.42, 1.4, 8), cg = new THREE.OctahedronGeometry(0.42, 0);
-  const halo = new THREE.SpriteMaterial({ map: TEX.glow, depthTest: false, color: glow, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.16 });
+  // braziers in room corners: stone pedestal, iron bowl, a Pixi flame card and a light
+  world.pylons = []; world.lightSrc = []; const cards = [];
+  const pg = new THREE.CylinderGeometry(0.3, 0.42, 1, 6), bg = new THREE.CylinderGeometry(0.62, 0.42, 0.3, 10);
   for (const r of d.rooms) {
     if (r.zone === 'secret') continue;
     for (const [tx, ty] of [[r.x + 1, r.y + 1], [r.x + r.w - 2, r.y + 1], [r.x + 1, r.y + r.h - 2], [r.x + r.w - 2, r.y + r.h - 2]]) {
       if (d.grid[ty * d.W + tx] !== T_FLOOR || R() > (r.zone === 'vault' ? 1 : 0.6)) continue;
-      const base = new THREE.Mesh(pg, MAT.pylon); const x = (tx + 0.5) * TILE, z = (ty + 0.5) * TILE;
-      base.position.set(x, 0.7, z); grp.add(base);
-      const cr = new THREE.Mesh(cg, crystal); cr.position.set(x, 1.85, z); grp.add(cr);
-      const h = new THREE.Sprite(halo); h.position.set(x, 1.85, z); h.scale.setScalar(3.2); grp.add(h);
-      world.pylons.push({ x, z, crystal: cr, t: R() * 6 }); d.grid[ty * d.W + tx] = T_WALL;
+      const x = (tx + 0.5) * TILE, z = (ty + 0.5) * TILE;
+      const ped = new THREE.Mesh(pg, MAT.pylon); ped.position.set(x, 0.5, z); grp.add(ped);
+      const bowl = new THREE.Mesh(bg, MAT.iron); bowl.position.set(x, 1.1, z); grp.add(bowl);
+      cards.push({ cell: 'brazier', x, y: 1.12, z: z + 0.1, glow: true });
+      world.pylons.push({ x, z, t: R() * 6 }); world.lightSrc.push({ x, y: 2.6, z, k: 1.15, t: R() * 9 }); d.grid[ty * d.W + tx] = T_WALL;
     }
   }
-  for (let i = 0; i < (IS_TOUCH ? 4 : 7); i++) { const l = new THREE.PointLight(B.light, 0, 17, 1.2); scene.add(l); world.lights.push(l); }
+  // torches and banners along the north walls of rooms: the faces the camera looks at
+  const torchParts = [[G3.box, MAT.iron, [0, 1.2, 0.12], [0.16, 0.16, 0.28]], [G3.cyl, MAT.wood, [0, 1.38, 0.27], [0.12, 0.42, 0.12], [0.3, 0, 0]]], torchAt = [];
+  for (const r of d.rooms) {
+    let next = r.x + 1 + Math.floor(R() * 3);
+    for (let tx = r.x; tx < r.x + r.w; tx++) {
+      const ty = r.y; if (tx < next || d.grid[ty * d.W + tx] !== T_FLOOR || d.grid[(ty - 1) * d.W + tx] !== T_WALL) continue;
+      const x = (tx + 0.5) * TILE, z = ty * TILE;
+      if (R() < 0.72) { torchAt.push({ x, z, ry: 0, s: 1 }); cards.push({ cell: 'torch', x, y: 1.5, z: z + 0.34, glow: true }); world.lightSrc.push({ x, y: 2.5, z: z + 0.8, k: 0.9, t: R() * 9 }); }
+      else cards.push({ cell: 'banner', x, y: 0.12, z: z + 0.04 });
+      next = tx + 3 + Math.floor(R() * 3);
+    }
+  }
+  instanceParts(grp, torchParts, torchAt);
+  // ground cover: grass, fungus, pebbles and bones, thickest where floor meets wall
+  const cover = BIOMES[bk].cover, maxTufts = IS_TOUCH ? 420 : 760, near = (x, y, list) => list.some(o => Math.abs(o.tx - x) <= 1 && Math.abs(o.ty - y) <= 1);
+  let tufts = 0;
+  for (let y = 1; y < d.H - 1 && tufts < maxTufts; y++) for (let x = 1; x < d.W - 1 && tufts < maxTufts; x++) {
+    if (d.grid[y * d.W + x] !== T_FLOOR || near(x, y, d.traps) || near(x, y, d.switches)) continue;
+    const walls = [[1, 0], [-1, 0], [0, 1], [0, -1]].filter(([dx, dy]) => d.grid[(y + dy) * d.W + x + dx] === T_WALL);
+    if (R() > (walls.length ? 0.6 : 0.1)) continue;
+    for (let k = 0, n = 1 + (R() < 0.45 ? 1 : 0) + (walls.length && R() < 0.4 ? 1 : 0); k < n; k++) {
+      let fx = 0.15 + R() * 0.7, fz = 0.15 + R() * 0.7;
+      for (const [dx, dy] of walls) { if (dx) fx = dx > 0 ? 0.62 + R() * 0.3 : 0.08 + R() * 0.3; if (dy) fz = dy > 0 ? 0.62 + R() * 0.3 : 0.06 + R() * 0.25; }
+      const i = Math.floor(R() * cover.length), kind = cover[i];
+      cards.push({ cell: 'tuft' + i, x: (x + fx) * TILE, y: 0, z: (y + fz) * TILE, sway: kind === 'grass' || kind === 'straw' || kind === 'flower' ? 0.6 + R() * 0.6 : 0, glow: GLOW_TUFTS.has(kind), flip: R() < 0.5 }); tufts++;
+    }
+  }
+  world.cards = cardLayer(grp, cards);
+  for (let i = 0; i < (IS_TOUCH ? 5 : 8); i++) { const l = new THREE.PointLight(B.light, 0, 15, 1.2); scene.add(l); world.lights.push(l); }
 
   // circuit switches (Batch 09 puzzles)
   world.switches = d.switches.map(sw => {
@@ -537,10 +621,11 @@ function openSeal() {
   world.sealOpenT = 0;
 }
 
-/* the round reactor plate from the props sheet, laid flat on the floor */
+/* the painted rune plate, laid flat on the floor under relays, the cache and the exit */
 function padDecal(x, z, size) {
-  const m = new THREE.Mesh(G3.plane, new THREE.MeshBasicMaterial({ map: PROPS.pad.tex, transparent: true, alphaTest: 0.3, depthWrite: false }));
-  m.scale.set(size, 1, size * PROPS.pad.h / PROPS.pad.w); m.position.set(x, 0.03, z); m.renderOrder = 1; return m;
+  const T = PROPS.runeplate;
+  const m = new THREE.Mesh(G3.plane, new THREE.MeshStandardMaterial({ map: T.tex, transparent: true, alphaTest: 0.3, depthWrite: false, roughness: 0.8, emissive: 0xffffff, emissiveMap: T.tex, emissiveIntensity: 0.15 }));
+  m.scale.set(size, 1, size * T.h / T.w); m.position.set(x, 0.03, z); m.renderOrder = 1; return m;
 }
 function buildPortal(colr) {
   const grp = new THREE.Group();
@@ -559,13 +644,20 @@ function buildPortal(colr) {
 
 function updateWorld(dt, px, pz, time) {
   SHARED_T.value = time;
-  const near = world.pylons.map(p => [p, (p.x - px) ** 2 + (p.z - pz) ** 2]).sort((a, b) => a[1] - b[1]);
+  // the nearest torches and braziers borrow the pooled lights; fire flickers on two beating sines
+  const near = world.lightSrc.map(p => [p, (p.x - px) ** 2 + (p.z - pz) ** 2]).sort((a, b) => a[1] - b[1]);
+  const cu = cardMat && cardMat.uniforms;
   world.lights.forEach((l, i) => {
-    const e = near[i]; if (!e) { l.intensity = 0; return; }
-    const p = e[0]; l.position.set(p.x, 2.2, p.z);
-    l.intensity = (26 + Math.sin(time * 3 + p.t) * 4) * clamp(1.4 - Math.sqrt(e[1]) / 30, 0, 1);
+    const e = near[i]; if (!e) { l.intensity = 0; if (cu && i < CARD_LIGHTS) cu.uLC.value[i].setRGB(0, 0, 0); return; }
+    const p = e[0], fl = 0.82 + Math.sin(time * 9.3 + p.t) * 0.09 + Math.sin(time * 23.1 + p.t * 2) * 0.06 + (Math.sin(time * 3.1 + p.t) > 0.93 ? -0.12 : 0);
+    l.position.set(p.x + Math.sin(time * 7 + p.t) * 0.05, p.y, p.z);
+    l.intensity = 30 * p.k * fl * clamp(1.4 - Math.sqrt(e[1]) / 30, 0, 1);
+    if (cu && i < CARD_LIGHTS) { cu.uLP.value[i].copy(l.position); cu.uLC.value[i].copy(l.color).multiplyScalar(l.intensity / 30 * 1.3); }
   });
-  for (const p of world.pylons) { p.crystal.rotation.y += dt; p.crystal.position.y = 1.85 + Math.sin(time * 2 + p.t) * 0.1; }
+  if (cu) { cu.uAmb.value.copy(hemi.color).multiplyScalar(hemi.intensity * 0.32); for (let i = world.lights.length; i < CARD_LIGHTS; i++) cu.uLC.value[i].setRGB(0, 0, 0); }
+  // embers lift off the nearest fires
+  const fc = BIOMES[world.biome].flame;
+  for (let i = 0; i < Math.min(5, near.length); i++) { const p = near[i][0]; if (rand() < dt * 2.2) particles.emit(p.x + rr(-0.2, 0.2), p.y + 0.1, p.z, rand() < 0.5 ? fc[1] : fc[2], 1, { speed: 0.4, life: 1.1, size: 0.1, grav: -1.6, lift: 1.2, drag: 1 }); }
   if (world.kitMats) world.kitMats.forEach((m, i) => { m.userData.ei ??= m.emissiveIntensity; m.emissiveIntensity = m.userData.ei * (1 + Math.sin(time * (1.6 + i) + i) * 0.25); });
   for (const a of world.anim) {
     a.t += dt;

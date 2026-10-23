@@ -1,7 +1,7 @@
 /* Agent Dungeon service worker.
-   Shell + shared atlases are precached; per-agent atlases, Three.js modules and fonts are cached on first use,
+   Shell + shared atlases are precached; per-agent atlases, Three.js + PixiJS modules and fonts are cached on first use,
    so any agent you've played once works offline. Bump VERSION whenever atlases or index.html change. */
-const VERSION = 'ad-v3-0';
+const VERSION = 'ad-v3-1';
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'atlas/manifest.json', 'atlas/batch.json',
   'atlas/thumbs.webp',

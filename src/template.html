@@ -26,6 +26,8 @@
 }
 html,body{height:100%;margin:0;background:var(--void);color:var(--ink);font-family:var(--f-body);overflow:hidden;-webkit-tap-highlight-color:transparent;user-select:none;-webkit-user-select:none}
 #gl{position:fixed;inset:0;width:100vw;height:100vh;display:block;touch-action:none;cursor:crosshair}
+/* PixiJS weather layer: same low-res pixel grid as the WebGL view, blown up with hard edges */
+#px{position:fixed;left:0;top:0;pointer-events:none;image-rendering:pixelated;image-rendering:crisp-edges}
 .vig{position:fixed;inset:0;pointer-events:none;background:radial-gradient(ellipse at 50% 45%,transparent 55%,rgba(0,0,0,.6) 100%)}
 .scan{display:none}
 /* frames cut from the props/HUD sheet, 9-sliced so corners stay crisp at any size */
@@ -382,7 +384,7 @@ button:focus-visible{outline:2px solid var(--gold);outline-offset:3px}
 <div id="toast" class="fr-banner"></div>
 <div id="fade"></div>
 
-<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}</script>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/","pixi.js":"https://cdn.jsdelivr.net/npm/pixi.js@8.6.6/dist/pixi.min.mjs"}}</script>
 <script type="module">
 /*__GAME__*/
 </script>

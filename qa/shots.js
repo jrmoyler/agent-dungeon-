@@ -2,7 +2,7 @@
    usage: node qa/shots.js [desktop|mobile] [heroId] [sectors=1,2,...] [outDir=qa] */
 const { chromium } = require('playwright');
 const path = require('path'), fs = require('fs');
-const ROOT = path.resolve(__dirname, '..'), TN = path.resolve(ROOT, 'node_modules', 'three');
+const ROOT = path.resolve(__dirname, '..'), NM = path.resolve(ROOT, 'node_modules');
 const mime = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.json': 'application/json', '.webp': 'image/webp', '.png': 'image/png' };
 const [mode = 'desktop', hero = 'caret', secArg = '1,2,3,4,5,6,7,8', outDir = path.join(ROOT, 'qa')] = process.argv.slice(2);
 const mobile = mode === 'mobile';
@@ -14,7 +14,7 @@ const mobile = mode === 'mobile';
   page.on('pageerror', e => errs.push('PAGEERROR: ' + e.message));
   await page.route('**/*', async r => {
     const u = new URL(r.request().url());
-    if (u.hostname === 'cdn.jsdelivr.net') return r.fulfill({ path: path.join(TN, u.pathname.replace('/npm/three@0.170.0', '')), contentType: 'text/javascript' });
+    if (u.hostname === 'cdn.jsdelivr.net') return r.fulfill({ path: path.join(NM, u.pathname.replace(/^\/npm\/([^@/]+)@[^/]+/, '$1')), contentType: 'text/javascript' });
     if (u.hostname === 'game.local') { const f = path.join(ROOT, u.pathname === '/' ? '/index.html' : decodeURIComponent(u.pathname)); return fs.existsSync(f) ? r.fulfill({ path: f, contentType: mime[path.extname(f)] || 'application/octet-stream' }) : r.fulfill({ status: 404 }); }
     return r.fulfill({ status: 200, body: '', contentType: 'text/css' });
   });
